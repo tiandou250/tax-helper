@@ -31,7 +31,8 @@ const FILES = [
     );
   });
   await page.reload({ waitUntil: "networkidle" });
-  await page.waitForTimeout(900);
+  await page.locator('input[type="file"]').waitFor({ state: "attached", timeout: 60000 });
+  await page.waitForTimeout(1200);
   console.log("标题:", await page.title());
 
   await page.locator('input[type="file"]').setInputFiles(FILES);
