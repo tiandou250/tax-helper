@@ -97,7 +97,7 @@ const check = (label, ok, extra = "") => {
 
 (async () => {
   makeCsv();
-  const b = await chromium.launch({ channel: "msedge", headless: true, args: ["--no-sandbox"] });
+  const b = await chromium.launch({ channel: "msedge", headless: true, args: ["--no-sandbox", "--no-proxy-server"] });
   const p = await b.newPage({ viewport: { width: 1440, height: 1100 } });
   const errs = [];
   p.on("pageerror", (e) => errs.push("PAGE " + e.message.slice(0, 140)));
