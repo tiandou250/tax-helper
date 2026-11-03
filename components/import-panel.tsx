@@ -222,37 +222,46 @@ export function ImportPanel({
           {entries.map((e, idx) => (
             <div
               key={e.uid}
-              className="queue__row"
+              className="queue__item"
               style={{ animationDelay: `${Math.min(idx, 8) * 60}ms` }}
             >
-              <span className="queue__name" title={e.name}>
-                {e.name}
-              </span>
-              <span className="queue__meta micro">
-                {e.status === "parsing" ? (
-                  <span className="skeleton" style={{ width: 96, height: 10 }} />
-                ) : e.status === "error" ? (
-                  "未识别到票面要素"
-                ) : (
-                  `识别 ${e.invoices.length} 张 · 税额 ${fmtMoney(
-                    e.invoices.reduce((s, i) => s + i.tax, 0),
-                    0,
-                  )}`
-                )}
-              </span>
-              <span
-                className={`tag ${
-                  e.status === "done" && e.confidence !== "structured" && e.confidence !== "sheet"
-                    ? "tag--ink"
-                    : ""
-                }`}
-              >
-                {e.status === "parsing"
-                  ? "解析中"
-                  : e.status === "error"
-                    ? "失败"
-                    : TAG_LABEL[e.confidence ?? "sheet"] ?? "就绪"}
-              </span>
+              <div className="queue__row">
+                <span className="queue__name" title={e.name}>
+                  {e.name}
+                </span>
+                <span className="queue__meta micro">
+                  {e.status === "parsing" ? (
+                    <span className="skeleton" style={{ width: 96, height: 10 }} />
+                  ) : e.status === "error" ? (
+                    "未识别到票面要素"
+                  ) : (
+                    `识别 ${e.invoices.length} 张 · 税额 ${fmtMoney(
+                      e.invoices.reduce((s, i) => s + i.tax, 0),
+                      0,
+                    )}`
+                  )}
+                </span>
+                <span
+                  className={`tag ${
+                    e.status === "done" && e.confidence !== "structured" && e.confidence !== "sheet"
+                      ? "tag--ink"
+                      : ""
+                  }`}
+                >
+                  {e.status === "parsing"
+                    ? "解析中"
+                    : e.status === "error"
+                      ? "失败"
+                      : TAG_LABEL[e.confidence ?? "sheet"] ?? "就绪"}
+                </span>
+              </div>
+
+              {e.text && e.text.trim().length > 0 && (
+                <details className="queue__detail">
+                  <summary className="micro">查看识别到的文字（判断是否为版式问题）</summary>
+                  <pre className="queue__pre">{e.text.slice(0, 900)}</pre>
+                </details>
+              )}
             </div>
           ))}
         </div>
@@ -260,10 +269,10 @@ export function ImportPanel({
 
       {notes.length > 0 && (
         <div className="warn-box" style={{ marginTop: 16 }}>
-          {notes.slice(0, 4).map((n) => (
+          {notes.slice(0, 6).map((n) => (
             <div key={n}>· {n}</div>
           ))}
-          {notes.length > 4 && <div>· 其余 {notes.length - 4} 条提示已省略</div>}
+          {notes.length > 6 && <div>· 其余 {notes.length - 6} 条提示已省略</div>}
         </div>
       )}
 

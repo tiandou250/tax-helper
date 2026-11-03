@@ -10,6 +10,8 @@ export interface ParseResult {
   total: number;
   /** 识别方式：表格、结构化 XML、文字层、二维码 */
   confidence?: Confidence | "sheet";
+  /** 从 PDF / OFD 里抽到的原始文字（用于人工核对识别是否正常） */
+  text?: string;
 }
 
 type FieldKey =
@@ -248,6 +250,7 @@ export async function parseFile(file: File, companyName?: string): Promise<Parse
       warnings: outcome.warnings,
       total: 1,
       confidence: outcome.confidence,
+      text: outcome.text,
     };
   }
   const { invoice, warnings } = buildInvoice(outcome.fields, companyName);
@@ -257,6 +260,7 @@ export async function parseFile(file: File, companyName?: string): Promise<Parse
     warnings: [...outcome.warnings, ...warnings],
     total: 1,
     confidence: outcome.confidence,
+    text: outcome.text,
   };
 }
 

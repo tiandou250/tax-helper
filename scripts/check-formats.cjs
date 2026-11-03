@@ -10,6 +10,8 @@ const FILES = [
   `${DIR}/sample-电子发票.ofd`,
   `${DIR}/sample-电子发票.pdf`,
   `${DIR}/sample-发票照片.png`,
+  `${DIR}/sample-真实版式.pdf`,
+  `${DIR}/sample-图像版.pdf`,
 ];
 
 (async () => {
@@ -38,6 +40,8 @@ const FILES = [
   );
   console.log("队列:");
   rows.forEach((r) => console.log("  " + r));
+  const notes = await page.$$eval(".warn-box div", (els) => els.map((e) => e.innerText));
+  console.log("提示:", notes);
 
   await page.locator(".import-foot .btn--primary").click();
   await page.waitForTimeout(1500);

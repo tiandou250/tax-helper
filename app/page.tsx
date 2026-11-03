@@ -148,6 +148,7 @@ export default function Page() {
   const [editing, setEditing] = useState<Invoice | null>(null);
   const [dirFilter, setDirFilter] = useState<"all" | "output" | "input">("all");
   const [kindFilter, setKindFilter] = useState<"all" | "special" | "ordinary">("all");
+  const [projectFilter, setProjectFilter] = useState("");
   const [q, setQ] = useState("");
   const toastTimer = useRef<number | null>(null);
 
@@ -212,7 +213,7 @@ export default function Page() {
   );
   const trend = useMemo(() => groupByMonth(invoices), [invoices]);
   const rateBuckets = useMemo(() => groupByRate(periodInvoices), [periodInvoices]);
-  const categories = useMemo(() => groupBy(periodInvoices, (i) => i.category, 6), [periodInvoices]);
+  const categories = useMemo(() => groupBy(periodInvoices, (i) => i.category, 8), [periodInvoices]);
   const parties = useMemo(
     () => groupBy(periodInvoices, (i) => i.counterparty || "未填写", 6),
     [periodInvoices],
@@ -222,6 +223,32 @@ export default function Page() {
   const periodAmount = result.outputAmount + result.inputAmount;
   const specialTotal = rateBuckets.reduce((s, b) => s + b.specialAmount, 0);
   const ordinaryTotal = rateBuckets.reduce((s, b) => s + b.ordinaryAmount, 0);
+
+  /* 按发票项目（票面商品/服务名）聚合 */
+  const projectOptions = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const i of periodInvoices) {
+      const key = i.category || "未分类";
+      map.set(key, (map.get(key) ?? 0) + i.amount);
+    }
+    return [...map.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => name);
+  }, [periodInvoices]);
+
+  const activeProject = projectFilter && projectOptions.includes(projectFilter) ? projectFilter : "";
+
+  const projectStats = useMemo(() => {
+    if (!activeProject) return null;
+    const list = periodInvoices.filter((i) => (i.category || "未分类") === activeProject);
+    const amount = list.reduce((s, i) => s + i.amount, 0);
+    return {
+      count: list.length,
+      amount,
+      tax: list.reduce((s, i) => s + i.tax, 0),
+      inputCount: list.filter((i) => i.direction === "input").length,
+      outputCount: list.filter((i) => i.direction === "output").length,
+      share: periodAmount > 0 ? (amount / periodAmount) * 100 : 0,
+    };
+  }, [activeProject, periodInvoices, periodAmount]);
 
   const byKind = useMemo(() => {
     const rows: { label: string; amount: number; tax: number; count: number }[] = [];
@@ -244,11 +271,12 @@ export default function Page() {
     return periodInvoices
       .filter((i) => (dirFilter === "all" ? true : i.direction === dirFilter))
       .filter((i) => (kindFilter === "all" ? true : i.kind === kindFilter))
+      .filter((i) => (activeProject ? (i.category || "未分类") === activeProject : true))
       .filter((i) =>
         kw ? [i.counterparty, i.category, i.number].join(" ").toLowerCase().includes(kw) : true,
       )
       .sort((a, b) => b.date.localeCompare(a.date));
-  }, [periodInvoices, dirFilter, kindFilter, q]);
+  }, [periodInvoices, dirFilter, kindFilter, activeProject, q]);
 
   /* ---------------- 操作 ---------------- */
   const addInvoices = (list: Invoice[]) => {
@@ -548,6 +576,19 @@ export default function Page() {
                         </button>
                       ))}
                     </div>
+                    <select
+                      className="select toolbar__project"
+                      value={activeProject}
+                      onChange={(e) => setProjectFilter(e.target.value)}
+                      title="按发票项目筛选"
+                    >
+                      <option value="">全部项目</option>
+                      {projectOptions.map((p) => (
+                        <option key={p} value={p}>
+                          {p}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <input
                     className="input toolbar__search"
@@ -556,6 +597,26 @@ export default function Page() {
                     onChange={(e) => setQ(e.target.value)}
                   />
                 </div>
+
+                {projectStats && (
+                  <div className="project-bar">
+                    <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
+                      <span className="body" style={{ fontWeight: 600 }}>
+                        {activeProject}
+                      </span>
+                      <span className="tag">
+                        进项 {projectStats.inputCount} 张 · 销项 {projectStats.outputCount} 张
+                      </span>
+                      <button className="btn--text" onClick={() => setProjectFilter("")}>
+                        取消筛选
+                      </button>
+                    </div>
+                    <span className="micro num">
+                      不含税 {fmtMoney(projectStats.amount, 0)} · 税额 {fmtMoney(projectStats.tax, 0)} · 占本期{" "}
+                      {projectStats.share.toFixed(1)}%
+                    </span>
+                  </div>
+                )}
 
                 <div style={{ borderTop: "1px solid var(--line-soft)" }}>
                   <InvoiceTable
@@ -582,7 +643,7 @@ export default function Page() {
                 <div>
                   <h2 className="h2">分类汇总</h2>
                   <p className="sub" style={{ marginTop: 12 }}>
-                    按税率、票种、费用类别与往来单位拆分，每块可单独导出
+                    按税率、票种、发票项目与往来单位拆分，每块可单独导出
                   </p>
                 </div>
               </div>
@@ -682,16 +743,19 @@ export default function Page() {
                 <Reveal>
                   <div className="card card--hover" style={{ height: "100%" }}>
                     <div className="row" style={{ justifyContent: "space-between" }}>
-                      <h3 className="h3">按费用类别</h3>
+                      <h3 className="h3">按发票项目</h3>
                       <button
                         className="btn--text"
                         onClick={() =>
-                          exportNamedCsv("按费用类别", categories, periodAmount, activePeriod)
+                          exportNamedCsv("按发票项目", categories, periodAmount, activePeriod)
                         }
                       >
                         导出
                       </button>
                     </div>
+                    <p className="micro" style={{ marginTop: 8 }}>
+                      取票面商品 / 服务名称，点击任一行可在明细中筛该项目
+                    </p>
                     <MeterList
                       items={categories.map((c) => ({
                         name: c.name,
@@ -699,6 +763,10 @@ export default function Page() {
                         meta: `${c.count} 张 · 税额 ${fmtNumber(c.tax, 0)}`,
                       }))}
                       total={periodAmount}
+                      onPick={(name) => {
+                        setProjectFilter(name);
+                        document.getElementById("invoices")?.scrollIntoView({ behavior: "smooth" });
+                      }}
                     />
                   </div>
                 </Reveal>
@@ -973,6 +1041,7 @@ export default function Page() {
       {showForm && (
         <InvoiceModal
           initial={editing ?? undefined}
+          categories={projectOptions}
           onClose={() => {
             setShowForm(false);
             setEditing(null);

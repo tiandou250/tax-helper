@@ -14,6 +14,8 @@ export interface DocFields {
   tax?: number;
   rate?: number;
   itemName?: string;
+  /** 票面全部项目名（多行明细时用于提示） */
+  itemNames?: string[];
   kind?: InvoiceKind;
   rawText?: string;
 }
@@ -84,6 +86,7 @@ const ALIASES: Record<keyof DocFields, string[]> = {
   tax: ["TotalTaxAm", "合计税额", "HJSE", "TotalTaxAmount", "TaxAmount"],
   rate: ["TaxRate", "税率", "SL", "TaxRateValue"],
   itemName: ["ItemName", "货物或应税劳务名称", "项目名称", "GoodsName", "ItemNameValue"],
+  itemNames: [],
   kind: [],
   rawText: [],
 };
@@ -173,32 +176,63 @@ const cleanName = (s: string) => {
 };
 
 export function extractFromText(raw: string): DocFields | null {
-  const text = raw.replace(/\u00a0/g, " ").replace(/[ \t]+/g, " ");
+  const text = raw
+    .replace(/\u00a0/g, " ")
+    .replace(/[\u3000]/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .trim();
   const flat = text.replace(/\s+/g, "");
+  if (flat.length < 12) return null;
 
+  /* 发票号码：标签 → No. → 独立的 20 位 / 8 位数字 */
   const number =
-    flat.match(/发票号码[：:]?(\d{8,25})/)?.[1] ??
-    flat.match(/(?:InvoiceNumber|No\.?)[：:]?(\d{8,25})/i)?.[1];
-  const date =
-    normDate(text.match(/开票日期[：:]?\s*([0-9年月日\-/.\s]{8,14})/)?.[1]) ??
-    normDate(text.match(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/)?.[0]);
+    flat.match(/发票号码[：:]?([0-9]{8,25})/)?.[1] ??
+    flat.match(/发票号[：:]?([0-9]{8,25})/)?.[1] ??
+    flat.match(/(?:No|NO|№)[.：:]?([0-9]{8,25})/)?.[1] ??
+    flat.match(/(?<!\d)(\d{20})(?!\d)/)?.[1] ??
+    flat.match(/(?<!\d)(\d{8})(?!\d)/)?.[1];
+
+  /* 开票日期：标签 → 中文日期 → 破折号日期 */
+  const pad = (s: string) => s.padStart(2, "0");
+  const dm =
+    flat.match(/开票日期[：:]?(\d{4})[年\-/.](\d{1,2})[月\-/.](\d{1,2})/) ??
+    flat.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/) ??
+    flat.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  const date = dm ? `${dm[1]}-${pad(dm[2])}-${pad(dm[3])}` : undefined;
+
+  /* 价税合计：小写 → 价税合计后第一个金额 */
   const total =
-    num(flat.match(/[（(]小写[)）][：:]?[¥￥]?([\d,]+\.\d{2})/)?.[1]) ??
-    num(flat.match(/价税合计[^0-9]{0,14}[¥￥]?([\d,]+\.\d{2})/)?.[1]);
+    num(flat.match(/[（(]小写[)）][：:]?[¥￥]?([\d,]+\.?\d{0,2})/)?.[1]) ??
+    num(flat.match(/价税合计[^0-9]{0,18}?([\d,]+\.\d{2})/)?.[1]) ??
+    num(flat.match(/价税合计金额[：:]?[¥￥]?([\d,]+\.\d{2})/)?.[1]);
 
-  const sum = flat.match(/合计[¥￥]?([\d,]+\.\d{2})[¥￥]?([\d,]+\.\d{2})/);
-  const amount = num(sum?.[1]);
-  const tax = num(sum?.[2]);
+  /* 合计行：金额 + 税额 */
+  let amount: number | undefined;
+  let tax: number | undefined;
+  const sum =
+    flat.match(/合\s*计[¥￥]?([\d,]+\.\d{2})[¥￥]?([\d,]+\.\d{2})/) ??
+    flat.match(/合\s*计[¥￥]?([\d,]+\.\d{2})/);
+  if (sum) {
+    amount = num(sum[1]);
+    if (sum[2]) tax = num(sum[2]);
+  }
 
-  const rate = normRate(flat.match(/(\d{1,2})%/)?.[1]);
+  const rate = normRate(flat.match(/(\d{1,2})%/) ?.[1]);
 
-  // 名称：优先按「购买方 / 销售方」分块，再退回「名称：」出现顺序
+  /* 名称：先在整行里找，再在去空白的整篇里找 */
+  const namePattern = (label: string) =>
+    new RegExp(`${label}[^\\n]{0,20}?名称[：:]\\s*([^\\n]+)`);
+  const flatName = (label: string) =>
+    new RegExp(`${label}[^名\\n]{0,12}名称[：:]?([\\u4e00-\\u9fa5A-Za-z0-9（）()·]{2,40})`);
+
   const buyerRaw =
-    text.match(/购买方[^\n]{0,20}?名称[：:]\s*([^\n]+)/)?.[1] ??
-    text.match(/购方[^\n]{0,12}?名称[：:]\s*([^\n]+)/)?.[1];
+    text.match(namePattern("购买方"))?.[1] ??
+    text.match(namePattern("购方"))?.[1] ??
+    flat.match(flatName("购买方"))?.[1];
   const sellerRaw =
-    text.match(/销售方[^\n]{0,20}?名称[：:]\s*([^\n]+)/)?.[1] ??
-    text.match(/销方[^\n]{0,12}?名称[：:]\s*([^\n]+)/)?.[1];
+    text.match(namePattern("销售方"))?.[1] ??
+    text.match(namePattern("销方"))?.[1] ??
+    flat.match(flatName("销售方"))?.[1];
 
   const allNames = [...text.matchAll(/名称[：:]\s*([^\n]+)/g)]
     .map((m) => cleanName(m[1]))
@@ -207,10 +241,21 @@ export function extractFromText(raw: string): DocFields | null {
   const buyer = buyerRaw ? cleanName(buyerRaw) : allNames[0];
   const seller = sellerRaw ? cleanName(sellerRaw) : allNames[1];
 
-  const itemRaw = text.match(/项目名称[：:]?\s*([^\n]+)/)?.[1];
-  const itemName = itemRaw ? cleanName(itemRaw).slice(0, 20) : undefined;
+  /* 项目：优先税收分类编码写法 *类别*具体名称 */
+  const itemNames: string[] = [];
+  for (const m of text.matchAll(/\*([^*\n]{1,20})\*([^\s*]{1,30})/g)) {
+    const name = m[2].trim();
+    if (name && !itemNames.includes(name)) itemNames.push(name);
+  }
+  if (itemNames.length === 0) {
+    const itemRaw = text.match(/项目名称[：:]?\s*([^\n]+)/)?.[1];
+    if (itemRaw) {
+      const cleaned = cleanName(itemRaw).slice(0, 20);
+      if (cleaned) itemNames.push(cleaned);
+    }
+  }
 
-  if (!number && total === undefined) return null;
+  if (!number && total === undefined && !date) return null;
 
   return {
     number,
@@ -221,10 +266,43 @@ export function extractFromText(raw: string): DocFields | null {
     amount,
     tax,
     rate,
-    itemName,
+    itemName: itemNames[0],
+    itemNames,
     kind: /专用发票/.test(flat) ? "special" : /普通发票/.test(flat) ? "ordinary" : undefined,
-    rawText: text.slice(0, 4000),
+    rawText: text.slice(0, 6000),
   };
+}
+
+/** 从 PDF 首页渲染图里解发票二维码（版式 PDF / 无文字层时的兜底） */
+async function qrFromPdfPage(pdf: any): Promise<DocFields | null> {
+  try {
+    const { default: jsQR } = await import("jsqr");
+    const page = await pdf.getPage(1);
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    await page.render({ canvasContext: ctx, viewport, canvas } as never).promise;
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const qr = jsQR(img.data, img.width, img.height, { inversionAttempts: "attemptBoth" });
+    if (!qr) return null;
+    const parts = qr.data.split(",");
+    if (parts.length >= 6 && /^\d{1,2}$/.test(parts[0])) {
+      return {
+        code: parts[2] || undefined,
+        number: parts[3] || undefined,
+        total: num(parts[4]),
+        date: normDate(parts[5]),
+        rawText: qr.data,
+      };
+    }
+    return null;
+  } catch (err) {
+    console.warn("[doc-parse] PDF 二维码兜底失败:", (err as Error)?.message ?? err);
+    return null;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -277,13 +355,19 @@ export async function parseOfd(file: File): Promise<DocOutcome> {
   chunks.sort((a, b) => a.y - b.y || a.x - b.x);
   let line = "";
   let curY: number | null = null;
+  let prevX = -Infinity;
   const lines: string[] = [];
   for (const c of chunks) {
     if (curY === null || Math.abs(c.y - curY) > 2) {
       if (line) lines.push(line);
       line = c.s;
       curY = c.y;
-    } else line += c.s;
+    } else {
+      // 同一行里跨列的文本块之间留空格（OFD 单位是毫米，>6 视为换列）
+      if (c.x - prevX > 6) line += " ";
+      line += c.s;
+    }
+    prevX = c.x;
   }
   if (line) lines.push(line);
 
@@ -294,11 +378,21 @@ export async function parseOfd(file: File): Promise<DocOutcome> {
       fields: null,
       confidence: "text",
       warnings: [],
-      errors: ["OFD 文字层未能识别出票面要素，请核对后手工补录。"],
+      errors: [
+        text.replace(/\s+/g, "").length < 20
+          ? "这份 OFD 没有可读文字层，请改用该发票的 XML 原件，或手工录入。"
+          : `OFD 文字层读到 ${text.length} 个字符，但没匹配到发票号码 / 价税合计，可能是特殊版式。请改用 XML 原件或手工录入。`,
+      ],
       text,
     };
   }
-  return { fields, confidence: "text", warnings: ["依据版式文字层识别，税额与税率请核对。"], errors: [], text };
+  return {
+    fields,
+    confidence: "text",
+    warnings: ["依据 OFD 文字层识别，税率与对方信息请核对。"],
+    errors: [],
+    text,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -322,48 +416,87 @@ export async function parsePdf(file: File): Promise<DocOutcome> {
     const content = await page.getTextContent();
     const items = content.items
       .map((it) => {
-        const item = it as { str?: string; transform?: number[] };
+        const item = it as { str?: string; transform?: number[]; width?: number };
         if (!item.str || !item.transform) return null;
-        return { s: item.str, x: item.transform[4], y: item.transform[5] };
+        return {
+          s: item.str,
+          x: item.transform[4],
+          y: item.transform[5],
+          w: item.width ?? 0,
+        };
       })
-      .filter((v): v is { s: string; x: number; y: number } => Boolean(v?.s.trim()));
+      .filter((v): v is { s: string; x: number; y: number; w: number } => Boolean(v?.s.trim()));
 
     items.sort((a, b) => b.y - a.y || a.x - b.x);
     let line = "";
     let curY: number | null = null;
+    let prevEnd = -Infinity;
     const lines: string[] = [];
     for (const it of items) {
       if (curY === null || Math.abs(it.y - curY) > 3) {
         if (line) lines.push(line);
         line = it.s;
         curY = it.y;
-      } else line += it.s;
+      } else {
+        // 同一行里相邻单元格之间补空格，避免「数据服务费项1 200000.00」粘成一串
+        if (it.x - prevEnd > 1.5) line += " ";
+        line += it.s;
+      }
+      prevEnd = it.x + it.w;
     }
     if (line) lines.push(line);
     pages.push(lines.join("\n"));
   }
+  const text = pages.join("\n");
+  const flatLen = text.replace(/\s+/g, "").length;
+  let fields = extractFromText(text);
+  const warnings: string[] = [];
+  let confidence: Confidence = "text";
+
+  if (!fields) {
+    // 文字层不可用（版式转曲 / 扫描件 / 字体缺 ToUnicode）→ 兜底读二维码
+    const qr = await qrFromPdfPage(doc);
+    if (qr) {
+      fields = qr;
+      confidence = "qr";
+      warnings.push(
+        flatLen < 20
+          ? "这份 PDF 没有文字层（版式转曲或扫描件），已通过票面二维码取得票号、日期与价税合计。"
+          : "文字层里没匹配到票面要素，已改用票面二维码。",
+      );
+    } else {
+      await doc.destroy();
+      return {
+        fields: null,
+        confidence: "text",
+        warnings: [],
+        errors: [
+          flatLen < 20
+            ? "这份 PDF 没有可提取的文字层，也没读到发票二维码。请改用该发票的 OFD / XML 原件，或手工录入。"
+            : `PDF 读到 ${flatLen} 个字符，但没匹配到发票号码 / 价税合计，可能是特殊版式；也没读到二维码。可用「手工录入」补 4 个字段。`,
+        ],
+        text: text.slice(0, 2000),
+      };
+    }
+  }
+
   await doc.destroy();
 
-  const text = pages.join("\n");
-  const fields = extractFromText(text);
-  if (!fields) {
-    return {
-      fields: null,
-      confidence: "text",
-      warnings: [],
-      errors: [
-        "PDF 没有可提取的文字层（多半是扫描件），请上传该发票的 OFD / XML 原件，或使用手工录入。",
-      ],
-      text: text.slice(0, 500),
-    };
+  if (confidence === "text") {
+    const missing = [
+      !fields.number && "发票号码",
+      !fields.date && "开票日期",
+      fields.total === undefined && "价税合计",
+      !fields.buyer && !fields.seller && "对方单位",
+    ].filter(Boolean) as string[];
+    warnings.push(
+      missing.length
+        ? `依据 PDF 文字层识别，未读到：${missing.join("、")}，请在明细中补录。`
+        : "依据 PDF 文字层识别，请核对税率与对方信息。",
+    );
   }
-  return {
-    fields,
-    confidence: "text",
-    warnings: ["依据 PDF 文字层识别，税率与购买方信息请核对。"],
-    errors: [],
-    text,
-  };
+
+  return { fields, confidence, warnings, errors: [], text };
 }
 
 /* ------------------------------------------------------------------ */
@@ -475,6 +608,13 @@ export function buildInvoice(
   });
 
   if (!fields.date) warnings.push("未识别到开票日期，已使用今天。");
+
+  const itemCount = fields.itemNames?.length ?? 0;
+  if (itemCount > 1) {
+    warnings.push(
+      `票面含 ${itemCount} 个项目（${fields.itemNames!.slice(0, 3).join("、")}${itemCount > 3 ? " 等" : ""}），已按第一个归集，可在明细里改成需要的项目名。`,
+    );
+  }
 
   return { invoice, warnings };
 }

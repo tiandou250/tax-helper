@@ -92,9 +92,12 @@ export function RateStack({ data }: { data: RateBucket[] }) {
 export function MeterList({
   items,
   total,
+  onPick,
 }: {
   items: { name: string; value: number; meta?: string }[];
   total: number;
+  /** 点击某一行时回调（用于跳到明细并筛该项目） */
+  onPick?: (name: string) => void;
 }) {
   const on = useInView();
   if (items.length === 0) return <div className="empty">暂无数据</div>;
@@ -103,7 +106,13 @@ export function MeterList({
   return (
     <div style={{ display: "flex", flexDirection: "column" }}>
       {items.map((item, idx) => (
-        <div key={item.name} style={{ padding: "14px 0" }} className={idx === 0 ? "" : ""}>
+        <div
+          key={item.name}
+          style={{ padding: "14px 0", cursor: onPick ? "pointer" : undefined }}
+          onClick={() => onPick?.(item.name)}
+          className={onPick ? "meter-row" : undefined}
+          title={onPick ? "点击在发票明细中筛选该项目" : undefined}
+        >
           <div
             style={{
               display: "flex",
@@ -112,7 +121,10 @@ export function MeterList({
               alignItems: "baseline",
             }}
           >
-            <span className="body ellipsis" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <span
+              className="body ellipsis"
+              style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            >
               {item.name}
             </span>
             <span className="body num" style={{ whiteSpace: "nowrap" }}>

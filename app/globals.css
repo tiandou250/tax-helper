@@ -664,14 +664,52 @@ a {
   border-top: 1px solid var(--line-soft);
 }
 
+.queue__item {
+  border-bottom: 1px solid var(--line-soft);
+  animation: row-in 0.32s var(--ease) both;
+}
+
 .queue__row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 16px;
   padding: 12px 0;
-  border-bottom: 1px solid var(--line-soft);
-  animation: row-in 0.32s var(--ease) both;
+}
+
+.queue__detail {
+  padding: 0 0 12px;
+}
+
+.queue__detail summary {
+  cursor: pointer;
+  list-style: none;
+  color: var(--ink-2);
+  padding: 2px 0 8px;
+  transition: color 0.2s linear;
+}
+
+.queue__detail summary:hover {
+  color: var(--accent);
+}
+
+.queue__detail summary::-webkit-details-marker {
+  display: none;
+}
+
+.queue__pre {
+  margin: 0;
+  padding: 12px;
+  background: var(--bg-alt);
+  border-radius: var(--radius-field);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 180px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .queue__name {
@@ -1406,6 +1444,30 @@ a {
   height: 38px;
 }
 
+.toolbar__project {
+  width: 190px;
+  height: 38px;
+}
+
+.project-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 12px 24px;
+  background: var(--bg-alt);
+  border-top: 1px solid var(--line-soft);
+}
+
+.meter-row {
+  transition: opacity 0.2s linear;
+}
+
+.meter-row:hover .body {
+  color: var(--accent);
+}
+
 /* 手风琴 */
 .acc {
   padding: 0;
@@ -1664,6 +1726,12 @@ a {
   .toolbar__search {
     width: 100%;
   }
+  .toolbar__project {
+    width: 100%;
+  }
+  .project-bar {
+    padding: 12px 20px;
+  }
   .to-top {
     right: 16px;
     bottom: 20px;
@@ -1681,14 +1749,20 @@ a {
   }
   .queue__row {
     grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "name tag"
+      "meta meta";
     row-gap: 6px;
+    column-gap: 10px;
   }
-  .queue__meta {
-    grid-column: 1;
-    grid-row: 2;
+  .queue__name {
+    grid-area: name;
   }
   .queue__row .tag {
-    grid-row: 1;
+    grid-area: tag;
+  }
+  .queue__meta {
+    grid-area: meta;
   }
   .import-foot {
     flex-direction: column;

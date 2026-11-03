@@ -9,10 +9,13 @@ export function InvoiceModal({
   initial,
   onClose,
   onSave,
+  categories = [],
 }: {
   initial?: Invoice;
   onClose: () => void;
   onSave: (invoice: Invoice) => void;
+  /** 已有项目名，供输入时补全，避免同名不同写法 */
+  categories?: string[];
 }) {
   const [direction, setDirection] = useState<"input" | "output">(initial?.direction ?? "output");
   const [kind, setKind] = useState<"special" | "ordinary">(initial?.kind ?? "special");
@@ -131,13 +134,19 @@ export function InvoiceModal({
           </label>
 
           <label className="field">
-            <span className="field__label">商品或服务</span>
+            <span className="field__label">发票项目 / 商品服务</span>
             <input
               className="input"
               value={category}
-              placeholder="如：技术服务费、货物运输服务"
+              list="project-options"
+              placeholder="如：软件开发服务、货物运输服务"
               onChange={(e) => setCategory(e.target.value)}
             />
+            <datalist id="project-options">
+              {categories.map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
           </label>
 
           <div className="row" style={{ gap: 16, flexWrap: "wrap" }}>
