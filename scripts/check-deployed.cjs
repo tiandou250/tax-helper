@@ -11,6 +11,8 @@ const FILES = [
   `${DIR}/sample-电子发票.ofd`,
   `${DIR}/sample-电子发票.pdf`,
   `${DIR}/sample-发票照片.png`,
+  `${DIR}/sample-真实版式.pdf`,
+  `${DIR}/sample-图像版.pdf`,
 ];
 
 (async () => {
@@ -48,6 +50,19 @@ const FILES = [
   const data = await page.evaluate(() => JSON.parse(localStorage.getItem("piaoshui.invoices.v2")) || []);
   console.log("入库条数:", data.length);
   data.forEach((i) => console.log(`  ${i.date} ${i.counterparty || "(空)"} ${i.amount} / ${i.rate}%`));
+
+  // 按项目筛选
+  await page.locator("#invoices").scrollIntoViewIfNeeded();
+  await page.waitForTimeout(800);
+  const opts = await page.$$eval(".toolbar__project option", (els) => els.map((e) => e.textContent));
+  console.log("项目下拉:", opts.join(" / "));
+  if (opts.length > 1) {
+    await page.selectOption(".toolbar__project", opts[1]);
+    await page.waitForTimeout(600);
+    console.log("项目汇总:", (await page.locator(".project-bar").innerText()).replace(/\s+/g, " "));
+    await page.screenshot({ path: "D:/file/temp/deploy-project.png" });
+    await page.selectOption(".toolbar__project", "");
+  }
 
   await page.evaluate(() => window.scrollTo(0, document.querySelector("#overview").offsetTop - 40));
   await page.waitForTimeout(900);

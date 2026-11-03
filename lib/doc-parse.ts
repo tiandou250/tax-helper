@@ -172,8 +172,42 @@ const cleanName = (s: string) => {
     const i = out.indexOf(m);
     if (i > 0) out = out.slice(0, i);
   }
-  return out.replace(/[：:\s]+$/, "").trim();
+  // 版式 PDF 经常把公司名拆成 "宜昌律信 投资有限公司"，去掉内部空白
+  return out.replace(/[\s：:]+/g, "").trim();
 };
+
+/**
+ * 把同一页的文字块还原成行：
+ * 1) 先按 y 聚行（容差 tol，PDF 同行的基线常有 1~3pt 抖动）
+ * 2) 行内再按 x 排序，否则「（小写）」会跑到金额后面
+ * 3) 相邻块间距大于 gap 时补空格，避免表格单元格粘连成 "832408.575%"
+ */
+function buildLines(
+  rows: { s: string; x: number; y: number; w: number }[],
+  tol: number,
+  gap: number,
+): string {
+  const sorted = [...rows].sort((a, b) => b.y - a.y || a.x - b.x);
+  const lines: { y: number; items: typeof sorted }[] = [];
+  for (const it of sorted) {
+    const last = lines[lines.length - 1];
+    if (!last || Math.abs(last.y - it.y) > tol) lines.push({ y: it.y, items: [it] });
+    else last.items.push(it);
+  }
+  return lines
+    .map((l) => {
+      l.items.sort((a, b) => a.x - b.x);
+      let out = "";
+      let prevEnd = -Infinity;
+      for (const it of l.items) {
+        if (prevEnd > -Infinity && it.x - prevEnd > gap) out += " ";
+        out += it.s;
+        prevEnd = it.x + it.w;
+      }
+      return out;
+    })
+    .join("\n");
+}
 
 export function extractFromText(raw: string): DocFields | null {
   const text = raw
@@ -217,7 +251,11 @@ export function extractFromText(raw: string): DocFields | null {
     if (sum[2]) tax = num(sum[2]);
   }
 
-  const rate = normRate(flat.match(/(\d{1,2})%/) ?.[1]);
+  const rate =
+    normRate(text.match(/(?:^|\s)(\d{1,2})\s*%/)?.[1]) ??
+    [...flat.matchAll(/(\d{1,2})%/g)]
+      .map((m) => Number(m[1]))
+      .find((r) => [0, 1, 3, 5, 6, 9, 13, 17].includes(r));
 
   /* 名称：先在整行里找，再在去空白的整篇里找 */
   const namePattern = (label: string) =>
@@ -234,8 +272,22 @@ export function extractFromText(raw: string): DocFields | null {
     text.match(namePattern("销方"))?.[1] ??
     flat.match(flatName("销售方"))?.[1];
 
-  const allNames = [...text.matchAll(/名称[：:]\s*([^\n]+)/g)]
-    .map((m) => cleanName(m[1]))
+  // 版式票常见「购买方 名称：X  销售方 名称：Y」并列，且中间可能夹不可见字符，
+  // 所以不用前瞻，直接按「名称：」切段，再按公司类后缀截取
+  const NAME_RE =
+    /[\u4e00-\u9fa5A-Za-z0-9（）()·\s]{2,40}?(?:公司|集团|中心|厂|店|事务所|合作社|研究院|银行|医院|学校|政府|委员会)/;
+
+  const pickName = (chunk: string) => {
+    const line = chunk.split("\n")[0];
+    const m = line.match(NAME_RE);
+    if (m) return m[0].replace(/[\s：:]/g, "");
+    return cleanName(line);
+  };
+
+  const allNames = text
+    .split(/名称[：:]/)
+    .slice(1)
+    .map(pickName)
     .filter((s) => s.length >= 2);
 
   const buyer = buyerRaw ? cleanName(buyerRaw) : allNames[0];
@@ -351,27 +403,12 @@ export async function parseOfd(file: File): Promise<DocOutcome> {
     };
   }
 
-  // OFD 坐标原点在左上、Y 向下，按 Y 升序还原行
-  chunks.sort((a, b) => a.y - b.y || a.x - b.x);
-  let line = "";
-  let curY: number | null = null;
-  let prevX = -Infinity;
-  const lines: string[] = [];
-  for (const c of chunks) {
-    if (curY === null || Math.abs(c.y - curY) > 2) {
-      if (line) lines.push(line);
-      line = c.s;
-      curY = c.y;
-    } else {
-      // 同一行里跨列的文本块之间留空格（OFD 单位是毫米，>6 视为换列）
-      if (c.x - prevX > 6) line += " ";
-      line += c.s;
-    }
-    prevX = c.x;
-  }
-  if (line) lines.push(line);
-
-  const text = lines.join("\n");
+  // OFD 坐标原点在左上、Y 向下：buildLines 按 y 降序不适用，先翻转再还原
+  const text = buildLines(
+    chunks.map((c) => ({ s: c.s, x: c.x, y: -c.y, w: 0 })),
+    2,
+    6,
+  );
   const fields = extractFromText(text);
   if (!fields) {
     return {
@@ -428,24 +465,7 @@ export async function parsePdf(file: File): Promise<DocOutcome> {
       .filter((v): v is { s: string; x: number; y: number; w: number } => Boolean(v?.s.trim()));
 
     items.sort((a, b) => b.y - a.y || a.x - b.x);
-    let line = "";
-    let curY: number | null = null;
-    let prevEnd = -Infinity;
-    const lines: string[] = [];
-    for (const it of items) {
-      if (curY === null || Math.abs(it.y - curY) > 3) {
-        if (line) lines.push(line);
-        line = it.s;
-        curY = it.y;
-      } else {
-        // 同一行里相邻单元格之间补空格，避免「数据服务费项1 200000.00」粘成一串
-        if (it.x - prevEnd > 1.5) line += " ";
-        line += it.s;
-      }
-      prevEnd = it.x + it.w;
-    }
-    if (line) lines.push(line);
-    pages.push(lines.join("\n"));
+    pages.push(buildLines(items, 3, 1.5));
   }
   const text = pages.join("\n");
   const flatLen = text.replace(/\s+/g, "").length;
