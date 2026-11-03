@@ -16,7 +16,12 @@ const manifest = JSON.parse(fs.readFileSync(path.join(DIR, "expected.json"), "ut
 const near = (a, b) => typeof a === "number" && typeof b === "number" && Math.abs(a - b) < 0.02;
 
 (async () => {
-  const browser = await chromium.launch({ channel: "msedge", headless: true, args: ["--no-sandbox"] });
+  // --no-proxy-server：本机系统代理会劫持 github.io，直连反而正常
+  const browser = await chromium.launch({
+    channel: "msedge",
+    headless: true,
+    args: ["--no-sandbox", "--no-proxy-server"],
+  });
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
   await page.goto(URL, { waitUntil: "networkidle" });
   await page.locator('input[type="file"]').first().waitFor({ state: "attached", timeout: 60000 });

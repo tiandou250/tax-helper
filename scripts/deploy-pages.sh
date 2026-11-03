@@ -39,19 +39,25 @@ git add -A
 git "${IDENT[@]}" commit -q -m "deploy: $(date '+%Y-%m-%d %H:%M')" || echo "  （内容无变化）"
 
 echo "3/3 推送到 gh-pages"
+# 本机 ~/.ssh/config 把 GitHub 强制走本地代理，代理挂掉时推送必然失败；
+# 这里优先直连（22 端口实测可用），失败再退回配置文件里的代理链路。
+DIRECT_SSH="ssh -F /dev/null -o StrictHostKeyChecking=accept-new -o BatchMode=yes -i $HOME/.ssh/id_ed25519"
+
+try_push() {
+  if GIT_SSH_COMMAND="$DIRECT_SSH" git push -f origin gh-pages 2>/tmp/push-direct.log; then
+    return 0
+  fi
+  # push 报错但包可能已到远端
+  LOCAL=$(git rev-parse HEAD)
+  git fetch -q origin gh-pages 2>/dev/null || true
+  [ "$(git rev-parse FETCH_HEAD 2>/dev/null)" = "$LOCAL" ] && return 0
+  git push -f origin gh-pages
+}
+
 for i in 1 2 3 4 5; do
-  if git push -f origin gh-pages; then
+  if try_push; then
     echo "✔ 已推送，约 1 分钟后生效：https://tiandou250.github.io/tax-helper/"
     exit 0
-  fi
-  # 代理不稳定时 push 会报 disconnect，但包常常已经到达远端
-  if git ls-remote --heads origin gh-pages 2>/dev/null | grep -q gh-pages; then
-    LOCAL=$(git rev-parse HEAD)
-    git fetch -q origin gh-pages 2>/dev/null || true
-    if [ "$(git rev-parse FETCH_HEAD 2>/dev/null)" = "$LOCAL" ]; then
-      echo "✔ 推送报错但远端已收到本次提交，视为成功"
-      exit 0
-    fi
   fi
   echo "第 $i 次失败，10 秒后重试（代理不稳定时常见）"
   sleep 10
