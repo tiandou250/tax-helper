@@ -2343,3 +2343,24 @@ a {
     width: 100%;
   }
 }
+
+/* 宽图表（如利润瀑布图）在窄屏下横向滚动，避免文字互相挤压 */
+.viz-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.viz-scroll::-webkit-scrollbar {
+  height: 6px;
+}
+
+.viz-scroll::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: var(--radius-pill);
+}
+
+.viz-scroll-hint {
+  margin-top: 8px;
+  text-align: right;
+}

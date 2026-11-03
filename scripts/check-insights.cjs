@@ -47,11 +47,12 @@ function makeCsv() {
 }
 
 const PROBE = () => {
-  const out = { texts: [], overflow: [], heights: {}, rounds: [] };
+  const out = { texts: [], overflow: [], heights: {}, rounds: [], overlaps: [] };
   for (const [name, root] of [["insights", document.querySelector("#insights")], ["fin", document.querySelector("#fin-insights")]]) {
     if (!root) continue;
     root.querySelectorAll("svg").forEach((svg, si) => {
       const vb = svg.viewBox.baseVal;
+      const boxes = [];
       svg.querySelectorAll("text").forEach((t) => {
         let bb;
         try { bb = t.getBBox(); } catch { return; }
@@ -59,12 +60,25 @@ const PROBE = () => {
         if (bb.x < -2 || bb.x + bb.width > vb.width + 2 || bb.y < -2 || bb.y + bb.height > vb.height + 2) {
           out.texts.push(`${name}#${si} "${t.textContent?.slice(0, 16)}" x=${Math.round(bb.x)} w=${Math.round(bb.width)}/${Math.round(vb.width)}`);
         }
+        boxes.push({ s: t.textContent?.slice(0, 14), x1: bb.x, y1: bb.y, x2: bb.x + bb.width, y2: bb.y + bb.height });
       });
+      // 文字两两相交 = 排版重叠，任何图表都不该出现
+      for (let i = 0; i < boxes.length; i++) {
+        for (let j = i + 1; j < boxes.length; j++) {
+          const a = boxes[i], c = boxes[j];
+          const ox = Math.min(a.x2, c.x2) - Math.max(a.x1, c.x1);
+          const oy = Math.min(a.y2, c.y2) - Math.max(a.y1, c.y1);
+          if (ox > 1 && oy > 1) {
+            out.overlaps.push(`${name}#${si} "${a.s}"×"${c.s}" 重叠 ${Math.round(ox)}×${Math.round(oy)}px`);
+          }
+        }
+      }
     });
     root.querySelectorAll("*").forEach((el) => {
       if (el.scrollWidth - el.clientWidth > 2 && el.clientWidth > 0) {
         const cls = String(el.className?.baseVal ?? el.className ?? "");
-        if (/review-scroll|table-scroll/.test(cls)) return;
+        // 表格与宽图表是「有意横向滚动」，不算溢出；页面本身不允许横向滚动
+        if (/review-scroll|table-scroll|viz-scroll/.test(cls)) return;
         out.overflow.push(`${name} .${cls.slice(0, 40)} ${el.scrollWidth}>${el.clientWidth}`);
       }
     });
@@ -213,6 +227,10 @@ const check = (label, ok, extra = "") => {
   check("无横向溢出", desk.rounds.pageOverflow === 0);
   check("导入卡与内容左沿对齐", desk.rounds.align === 0, `偏差 ${desk.rounds.align}px`);
   check("SVG 文字无越界", desk.texts.length === 0, desk.texts.slice(0, 2).join(" | "));
+  check("图表文字无重叠", desk.overlaps.length === 0, desk.overlaps.slice(0, 3).join(" | "));
+  const deskScroll = await p.evaluate(() =>
+    [...document.querySelectorAll(".viz-scroll")].map((e) => e.scrollWidth - e.clientWidth));
+  check("桌面端宽图表无需横向滚动", deskScroll.every((v) => v <= 2), `溢出 ${deskScroll.join("/")}px`);
   check("无元素横向溢出", desk.overflow.length === 0, desk.overflow.slice(0, 2).join(" | "));
   check("同行卡片等高", Object.keys(desk.heights).length === 0, JSON.stringify(desk.heights));
   const tints = desk.rounds.tints.map((t) => t.split(":")[1]);
@@ -236,9 +254,27 @@ const check = (label, ok, extra = "") => {
   for (let y = 0; y < h2; y += 700) { await p.evaluate((v) => window.scrollTo(0, v), y); await p.waitForTimeout(90); }
   await p.waitForTimeout(400);
   const mob = await p.evaluate(PROBE);
-  check("无横向溢出", mob.rounds.pageOverflow === 0);
-  check("SVG 文字无越界", mob.texts.length === 0, mob.texts.slice(0, 2).join(" | "));
-  check("无元素横向溢出", mob.overflow.length === 0, mob.overflow.slice(0, 2).join(" | "));
+  check("发票模块 无横向溢出", mob.rounds.pageOverflow === 0);
+  check("发票模块 SVG 文字无越界", mob.texts.length === 0, mob.texts.slice(0, 2).join(" | "));
+  check("发票模块 图表文字无重叠", mob.overlaps.length === 0, mob.overlaps.slice(0, 3).join(" | "));
+  check("发票模块 无元素横向溢出", mob.overflow.length === 0, mob.overflow.slice(0, 2).join(" | "));
+
+  // 报表模块在窄屏下也要单独量一遍（瀑布图有 8 个柱，最容易挤）
+  await p.getByRole("button", { name: "财务报表" }).click();
+  await p.waitForTimeout(1200);
+  const h3 = await p.evaluate(() => document.body.scrollHeight);
+  for (let y = 0; y < h3; y += 700) { await p.evaluate((v) => window.scrollTo(0, v), y); await p.waitForTimeout(90); }
+  await p.waitForTimeout(400);
+  const mobFin = await p.evaluate(PROBE);
+  check("报表模块 无横向溢出", mobFin.rounds.pageOverflow === 0);
+  check("报表模块 SVG 文字无越界", mobFin.texts.length === 0, mobFin.texts.slice(0, 2).join(" | "));
+  check("报表模块 图表文字无重叠", mobFin.overlaps.length === 0, mobFin.overlaps.slice(0, 3).join(" | "));
+  check("报表模块 无元素横向溢出", mobFin.overflow.length === 0, mobFin.overflow.slice(0, 2).join(" | "));
+  const mobScroll = await p.evaluate(() => {
+    const el = document.querySelector("#fin-insights .viz-scroll");
+    return el ? { over: el.scrollWidth - el.clientWidth, hint: document.querySelectorAll(".viz-scroll-hint").length } : null;
+  });
+  check("窄屏瀑布图改用横向滚动并有提示", Boolean(mobScroll && mobScroll.over > 20 && mobScroll.hint > 0), JSON.stringify(mobScroll));
 
   console.log(`\n通过 ${pass} / 失败 ${fail}`);
   console.log("运行时错误:", errs.length ? errs : "无");

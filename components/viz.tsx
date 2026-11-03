@@ -67,6 +67,26 @@ function niceCeil(v: number) {
 
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 
+/** 把长标签按每行 n 个字切开 */
+const chunk = (s: string, n: number) => {
+  if (n <= 0) return [s];
+  const out: string[] = [];
+  for (let i = 0; i < s.length; i += n) out.push(s.slice(i, i + n));
+  return out;
+};
+
+/**
+ * 横轴标签自适应：柱位宽度 step 放不下一行时改为折行，并回传需要的底部留白。
+ * 这样窄屏（约 390px）下 6～8 个柱子的标签也不会挤成一团。
+ */
+function fitLabels(labels: string[], step: number, basePadB: number, lineH = 13) {
+  const perLine = step < 62 ? Math.max(2, Math.floor((step - 2) / 12)) : 0;
+  const lines = labels.map((l) => (perLine > 0 ? chunk(l, perLine) : [l]));
+  const maxLines = Math.max(1, ...lines.map((l) => l.length));
+  const fontSize = step < 46 ? 10 : 11;
+  return { lines, maxLines, fontSize, lineH, padB: basePadB + (maxLines - 1) * lineH };
+}
+
 /** 图例 */
 export function Legend({
   items,
@@ -473,8 +493,11 @@ export function Columns({
   const padL = 58;
   const padR = 16;
   const padT = 18;
-  const padB = 30;
   const iw = Math.max(20, w - padL - padR);
+  const step = iw / items.length;
+  /* 柱位放不下一行标签时折行，底部留白随之加高 */
+  const fit = fitLabels(items.map((i) => i.label), step, 30);
+  const padB = fit.padB;
   const ih = Math.max(40, height - padT - padB);
 
   const maxPos = Math.max(0, ...items.map((i) => i.value));
@@ -483,7 +506,6 @@ export function Columns({
   const bottom = maxNeg < 0 ? -niceCeil(-maxNeg) : 0;
   const span = top - bottom || 1;
 
-  const step = iw / items.length;
   const bw = Math.min(46, step * 0.55);
   const y = (v: number) => padT + ih - ((v - bottom) / span) * ih;
   const zero = y(0);
@@ -530,13 +552,7 @@ export function Columns({
                 onClick={() => onPick?.(it.label)}
                 style={{ cursor: onPick ? "pointer" : undefined }}
               >
-                <rect
-                  x={padL + step * i}
-                  y={padT}
-                  width={step}
-                  height={ih}
-                  fill="transparent"
-                />
+                <rect x={padL + step * i} y={padT} width={step} height={ih} fill="transparent" />
                 <rect
                   x={cx - bw / 2}
                   y={on ? top0 : zero}
@@ -563,19 +579,27 @@ export function Columns({
             );
           })}
 
-          {items.map((it, i) => (
-            <text
-              key={`t-${it.label}`}
-              x={padL + step * (i + 0.5)}
-              y={height - 10}
-              textAnchor="middle"
-              fontSize="11"
-              fill={it.active ? C.ink : C.ink3}
-              style={{ opacity: on ? 1 : 0, transition: `opacity .5s ${EASE} .3s` }}
-            >
-              {it.label}
-            </text>
-          ))}
+          {items.map((it, i) => {
+            const cx = padL + step * (i + 0.5);
+            const ls = fit.lines[i];
+            return (
+              <text
+                key={`t-${it.label}`}
+                x={cx}
+                y={height - 12 - (ls.length - 1) * fit.lineH}
+                textAnchor="middle"
+                fontSize={fit.fontSize}
+                fill={it.active ? C.ink : C.ink3}
+                style={{ opacity: on ? 1 : 0, transition: `opacity .5s ${EASE} .3s` }}
+              >
+                {ls.map((line, li) => (
+                  <tspan key={li} x={cx} dy={li === 0 ? 0 : fit.lineH}>
+                    {line}
+                  </tspan>
+                ))}
+              </text>
+            );
+          })}
         </svg>
       )}
     </div>
@@ -595,6 +619,7 @@ export function Waterfall({
   height?: number;
   valueFormat?: (n: number) => string;
 }) {
+  const [wrapRef, wrapW] = useMeasure<HTMLDivElement>();
   const [ref, w] = useMeasure<HTMLDivElement>();
   const on = useEnter();
   const [hover, setHover] = useState<number | null>(null);
@@ -612,10 +637,16 @@ export function Waterfall({
 
   const padL = 58;
   const padR = 16;
-  const padT = 22;
-  const padB = 46;
+  const padT = 32;
   const iw = Math.max(20, w - padL - padR);
+  /* 标签折行会导致底部留白增加，先算出来再定绘图区高度 */
+  const fit = fitLabels(bars.map((b) => b.label), iw / bars.length, 46);
+  const padB = fit.padB;
   const ih = Math.max(40, height - padT - padB);
+  /* 数值不得越过 labelLimit，否则会压到底部科目名 */
+  const labelLastY = height - 28;
+  const subY = height - 12;
+  const labelLimit = height - padB - 4;
 
   const hi = Math.max(0, ...bars.map((b) => Math.max(b.from, b.to)));
   const lo = Math.min(0, ...bars.map((b) => Math.min(b.from, b.to)));
@@ -628,105 +659,133 @@ export function Waterfall({
   const y = (v: number) => padT + ih - ((v - bottom) / span) * ih;
   const ticks = Array.from({ length: 5 }, (_, i) => bottom + (span * i) / 4);
 
-  return (
-    <div className="viz" ref={ref}>
-      {w > 0 && (
-        <svg width="100%" height={height} viewBox={`0 0 ${w} ${height}`} role="img">
-          {ticks.map((t, i) => (
-            <g key={i}>
-              <line
-                x1={padL}
-                x2={padL + iw}
-                y1={y(t)}
-                y2={y(t)}
-                stroke={t === 0 ? C.line : C.soft}
-                style={{ opacity: on ? 1 : 0, transition: `opacity .5s ${EASE} ${i * 40}ms` }}
-              />
-              <text
-                x={padL - 10}
-                y={y(t) + 4}
-                textAnchor="end"
-                fontSize="11"
-                fill={C.ink3}
-                style={{ opacity: on ? 1 : 0, transition: `opacity .5s ${EASE} ${i * 40}ms` }}
-              >
-                {valueFormat(t)}
-              </text>
-            </g>
-          ))}
+  /* 柱位过窄时数值文字会互相压住，给最小宽度并允许横向滚动 */
+  const minW = Math.round(padL + padR + bars.length * 48);
+  const needScroll = wrapW > 0 && minW > wrapW + 1;
 
-          {bars.map((b, i) => {
-            const cx = padL + step * (i + 0.5);
-            const yTop = y(b.to);
-            const yBot = y(b.from);
-            const h = Math.max(2, yBot - yTop);
-            const isUp = b.delta >= 0;
-            const fill = b.isTotal ? grey(0) : isUp ? grey(2) : grey(4);
-            return (
-              <g key={b.label} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
-                <rect x={padL + step * i} y={padT} width={step} height={ih} fill="transparent" />
-                {i > 0 && (
+  return (
+    <>
+      <div className="viz-scroll" ref={wrapRef}>
+        <div className="viz" ref={ref} style={{ minWidth: minW }}>
+          {w > 0 && (
+            <svg width="100%" height={height} viewBox={`0 0 ${w} ${height}`} role="img">
+              {ticks.map((t, i) => (
+                <g key={i}>
                   <line
-                    x1={padL + step * i}
-                    x2={padL + step * (i + 1) - bw / 2}
-                    y1={y(bars[i - 1].top)}
-                    y2={y(bars[i - 1].top)}
-                    stroke={C.ink3}
-                    strokeWidth="1"
-                    strokeDasharray="2 3"
-                    style={{ opacity: on ? 0.7 : 0, transition: `opacity .5s ${EASE} ${i * 90}ms` }}
+                    x1={padL}
+                    x2={padL + iw}
+                    y1={y(t)}
+                    y2={y(t)}
+                    stroke={t === 0 ? C.line : C.soft}
+                    style={{ opacity: on ? 1 : 0, transition: `opacity .5s ${EASE} ${i * 40}ms` }}
                   />
-                )}
-                <rect
-                  x={cx - bw / 2}
-                  y={on ? yTop : yBot}
-                  width={bw}
-                  height={on ? h : 1}
-                  rx="3"
-                  fill={hover === i ? C.accent : fill}
-                  style={{
-                    transition: `y .7s ${EASE} ${i * 80}ms, height .7s ${EASE} ${i * 80}ms, fill .2s ${EASE}`,
-                  }}
-                />
-                <text
-                  x={cx}
-                  y={on ? (b.delta >= 0 && !b.isTotal ? yTop - 7 : yBot + 15) : yBot}
-                  textAnchor="middle"
-                  fontSize="11"
-                  fill={hover === i ? C.ink : C.ink2}
-                  style={{
-                    opacity: on ? 1 : 0,
-                    transition: `opacity .5s ${EASE} ${i * 80 + 200}ms, y .7s ${EASE} ${i * 80}ms`,
-                  }}
-                >
-                  {valueFormat(b.delta)}
-                </text>
-                <text
-                  x={cx}
-                  y={height - 28}
-                  textAnchor="middle"
-                  fontSize="11.5"
-                  fill={b.isTotal ? C.ink : C.ink2}
-                  style={{ opacity: on ? 1 : 0, transition: `opacity .5s ${EASE} .3s` }}
-                >
-                  {b.label}
-                </text>
-                <text
-                  x={cx}
-                  y={height - 12}
-                  textAnchor="middle"
-                  fontSize="10"
-                  fill={C.ink3}
-                  style={{ opacity: on ? 1 : 0, transition: `opacity .5s ${EASE} .35s` }}
-                >
-                  {b.isTotal ? "小计" : b.delta >= 0 ? "＋" : "－"}
-                </text>
-              </g>
-            );
-          })}
-        </svg>
+                  <text
+                    x={padL - 10}
+                    y={y(t) + 4}
+                    textAnchor="end"
+                    fontSize="11"
+                    fill={C.ink3}
+                    style={{ opacity: on ? 1 : 0, transition: `opacity .5s ${EASE} ${i * 40}ms` }}
+                  >
+                    {valueFormat(t)}
+                  </text>
+                </g>
+              ))}
+
+              {bars.map((b, i) => {
+                const cx = padL + step * (i + 0.5);
+                const yTop = y(b.to);
+                const yBot = y(b.from);
+                const h = Math.max(2, yBot - yTop);
+                const isUp = b.delta >= 0;
+                const fill = b.isTotal ? grey(0) : isUp ? grey(2) : grey(4);
+
+                /*
+                 * 数值放在柱体外侧：累加项放柱顶上方、扣减项放柱底下方。
+                 * 小计柱从基线起算（柱底＝基线），扣减项累计接近 0 时也一样，
+                 * 直接放「柱底下方」会正好压住底部科目名，因此超过 labelLimit
+                 * 就改放柱顶上方。
+                 */
+                let labelY = b.delta >= 0 ? yTop - 8 : yBot + 15;
+                if (labelY > labelLimit) labelY = Math.min(yTop - 8, labelLimit);
+                if (labelY < 16) labelY = 16;
+
+                const ls = fit.lines[i];
+
+                return (
+                  <g key={b.label} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
+                    <rect x={padL + step * i} y={padT} width={step} height={ih} fill="transparent" />
+                    {i > 0 && (
+                      <line
+                        x1={padL + step * i}
+                        x2={padL + step * (i + 1) - bw / 2}
+                        y1={y(bars[i - 1].top)}
+                        y2={y(bars[i - 1].top)}
+                        stroke={C.ink3}
+                        strokeWidth="1"
+                        strokeDasharray="2 3"
+                        style={{ opacity: on ? 0.7 : 0, transition: `opacity .5s ${EASE} ${i * 90}ms` }}
+                      />
+                    )}
+                    <rect
+                      x={cx - bw / 2}
+                      y={on ? yTop : yBot}
+                      width={bw}
+                      height={on ? h : 1}
+                      rx="3"
+                      fill={hover === i ? C.accent : fill}
+                      style={{
+                        transition: `y .7s ${EASE} ${i * 80}ms, height .7s ${EASE} ${i * 80}ms, fill .2s ${EASE}`,
+                      }}
+                    />
+                    <text
+                      x={cx}
+                      y={labelY}
+                      textAnchor="middle"
+                      fontSize="11"
+                      fill={hover === i ? C.ink : C.ink2}
+                      style={{
+                        opacity: on ? 1 : 0,
+                        transition: `opacity .5s ${EASE} ${i * 80 + 200}ms`,
+                      }}
+                    >
+                      {valueFormat(b.delta)}
+                    </text>
+                    <text
+                      x={cx}
+                      y={labelLastY - (ls.length - 1) * fit.lineH}
+                      textAnchor="middle"
+                      fontSize={fit.fontSize + 0.5}
+                      fill={b.isTotal ? C.ink : C.ink2}
+                      style={{ opacity: on ? 1 : 0, transition: `opacity .5s ${EASE} .3s` }}
+                    >
+                      {ls.map((line, li) => (
+                        <tspan key={li} x={cx} dy={li === 0 ? 0 : fit.lineH}>
+                          {line}
+                        </tspan>
+                      ))}
+                    </text>
+                    <text
+                      x={cx}
+                      y={subY}
+                      textAnchor="middle"
+                      fontSize="10"
+                      fill={C.ink3}
+                      style={{ opacity: on ? 1 : 0, transition: `opacity .5s ${EASE} .35s` }}
+                    >
+                      {b.isTotal ? "小计" : b.delta >= 0 ? "＋" : "－"}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
+          )}
+        </div>
+      </div>
+      {needScroll && (
+        <p className="micro viz-scroll-hint">图表较宽，可左右滑动查看</p>
       )}
-    </div>
+    </>
   );
 }
 
@@ -756,13 +815,15 @@ export function GroupedColumns({
   const padL = 58;
   const padR = 16;
   const padT = 24;
-  const padB = 34;
   const iw = Math.max(20, w - padL - padR);
+  const step = iw / rows.length;
+  /* 柱位放不下一行标签时折行，底部留白随之加高 */
+  const fit = fitLabels(rows.map((r) => r.label), step, 34);
+  const padB = fit.padB;
   const ih = Math.max(40, height - padT - padB);
 
   const top = niceCeil(Math.max(1, ...rows.flatMap((r) => [r.current, r.prior])));
   const y = (v: number) => padT + ih - (Math.max(0, v) / top) * ih;
-  const step = iw / rows.length;
   const bw = Math.min(30, step * 0.3);
   const ticks = Array.from({ length: 5 }, (_, i) => (top * i) / 4);
 
@@ -796,6 +857,7 @@ export function GroupedColumns({
           {rows.map((r, i) => {
             const cx = padL + step * (i + 0.5);
             const hot = hover === r.label;
+            const ls = fit.lines[i];
             return (
               <g key={r.label} onMouseEnter={() => setHover(r.label)} onMouseLeave={() => setHover(null)}>
                 <rect x={padL + step * i} y={padT} width={step} height={ih} fill="transparent" />
@@ -818,13 +880,17 @@ export function GroupedColumns({
                 ))}
                 <text
                   x={cx}
-                  y={height - 12}
+                  y={height - 14 - (ls.length - 1) * fit.lineH}
                   textAnchor="middle"
-                  fontSize="11.5"
+                  fontSize={fit.fontSize + 0.5}
                   fill={C.ink2}
                   style={{ opacity: on ? 1 : 0, transition: `opacity .5s ${EASE} .3s` }}
                 >
-                  {r.label}
+                  {ls.map((line, li) => (
+                    <tspan key={li} x={cx} dy={li === 0 ? 0 : fit.lineH}>
+                      {line}
+                    </tspan>
+                  ))}
                 </text>
               </g>
             );
