@@ -219,6 +219,30 @@ a {
   white-space: nowrap;
 }
 
+/* 看板快捷入口：看板在页面较深处，给一个随模块切换的直达链接 */
+.nav__board {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--accent);
+  padding: 4px 0;
+  transition: opacity 0.2s linear;
+}
+
+.nav__board:hover {
+  opacity: 0.72;
+}
+
+.nav__board-arrow {
+  display: inline-block;
+  transition: transform 0.24s var(--ease);
+}
+
+.nav__board:hover .nav__board-arrow {
+  transform: translateY(2px);
+}
+
 .nav__link {
   font-size: 13px;
   color: var(--ink-2);
@@ -1616,6 +1640,9 @@ a {
   }
   .nav__links {
     gap: 12px;
+  }
+  .nav__board {
+    font-size: 12px;
   }
   .nav__link:nth-child(n + 3) {
     display: none;

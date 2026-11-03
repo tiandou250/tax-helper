@@ -125,7 +125,7 @@ export function ImportPanel({
         <div>
           <h1 className="h2">导入发票</h1>
           <p className="sub" style={{ marginTop: 12 }}>
-            直接拖入发票原件：PDF、OFD、XML 或照片，可多选批量识别
+            直接拖入发票原件：PDF、OFD、XML 或照片，可多选批量识别 · 导入后可在下方查看税金测算与经营看板
           </p>
         </div>
         {hasData && onClear && (

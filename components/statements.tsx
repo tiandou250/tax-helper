@@ -505,7 +505,7 @@ export function StatementImport({
           </button>
         </div>
         <p className="micro" style={{ marginTop: 6 }}>
-          Excel / CSV 三表通用，自动识别类型与期间
+          Excel / CSV 三表通用，自动识别类型与期间 · 导入后可在下方查看财务结构看板
         </p>
 
         <div

@@ -109,8 +109,9 @@ const check = (label, ok, extra = "") => {
   await p.waitForTimeout(900);
 
   /* ---------- 1. 发票侧 ---------- */
-  console.log("\n[1] 发票看板");
+  console.log("\n[1] 发票看板与入口");
   check("未导入数据时不出现看板", (await p.locator("#insights").count()) === 0);
+  check("空态不显示看板入口", (await p.locator(".nav__board").count()) === 0);
 
   await p.locator("#import input[type=file]").setInputFiles([CSV, `${BANK}/01-数电专票.pdf`]);
   await p.waitForTimeout(5000);
@@ -136,6 +137,14 @@ const check = (label, ok, extra = "") => {
   });
   check("位于应缴税费之后、参数之前", order.indexOf("insights") === order.indexOf("tax") + 1 && order.indexOf("params") > order.indexOf("insights"), order.join(" → "));
 
+  // 看板埋在页面深处，导航必须有直达入口
+  const navLabel = await p.locator(".nav__board").innerText().catch(() => "");
+  check("导航出现「经营看板」入口", navLabel.includes("经营看板"), navLabel.replace(/\s+/g, " "));
+  await p.locator(".nav__board").click();
+  await p.waitForTimeout(1300);
+  const jump = await p.evaluate(() => Math.round(document.querySelector("#insights").getBoundingClientRect().top));
+  check("入口能跳到看板且不被导航遮挡", jump > 0 && jump < 140, `距视口顶 ${jump}px`);
+
   await p.evaluate(() => window.scrollTo(0, document.querySelector("#insights").offsetTop - 40));
   await p.waitForTimeout(700);
   const box = await p.locator("#insights .viz").first().boundingBox();
@@ -156,6 +165,7 @@ const check = (label, ok, extra = "") => {
   await p.waitForTimeout(500);
   check("无报表时看板不渲染", (await p.locator("#fin-insights").count()) === 0);
   check("报表模块不出现发票看板", (await p.locator("#insights").count()) === 0);
+  check("报表模块未导入报表时无入口", (await p.locator(".nav__board").count()) === 0);
 
   const add = async (files) => {
     await p.locator("#statement-import input[type=file]").setInputFiles(files);
@@ -175,6 +185,8 @@ const check = (label, ok, extra = "") => {
   check("出现口径对比", finCards.some((c) => /本年累计 vs 上年累计|期末 vs 年初/.test(c)));
   check("不出现现金流卡（未导入）", !finCards.some((c) => c.includes("现金流")));
   check("瀑布图有 8 步以上", (await p.locator("#fin-insights svg").first().locator("text").count()) > 16);
+  const finNav = await p.locator(".nav__board").innerText().catch(() => "");
+  check("导航入口随模块切换为「财务看板」", finNav.includes("财务看板"), finNav.replace(/\s+/g, " "));
 
   /* ---------- 3. 真实年报 ---------- */
   console.log("\n[3] 真实年报");

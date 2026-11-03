@@ -488,6 +488,7 @@ export default function Page() {
         module={module}
         onChange={setModule}
         counts={{ invoice: invoices.length, statement: statements.length }}
+        boardReady={module === "invoice" ? invoices.length > 0 : statements.length > 0}
       />
 
       <div className="workspace">
