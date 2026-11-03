@@ -2,12 +2,11 @@
 
 import { useEffect, useState } from "react";
 
-export type ModuleKey = "invoice" | "statement" | "tax";
+export type ModuleKey = "invoice" | "statement";
 
 const TABS: { id: ModuleKey; label: string }[] = [
   { id: "invoice", label: "发票" },
   { id: "statement", label: "财务报表" },
-  { id: "tax", label: "税金测算" },
 ];
 
 export function Nav({

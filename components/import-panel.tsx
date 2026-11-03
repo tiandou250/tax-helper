@@ -107,15 +107,6 @@ export function ImportPanel({
     setPasteRows(res.invoices);
   };
 
-  const downloadTemplate = () => {
-    const blob = new Blob([`\uFEFF${TEMPLATE_CSV}`], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "发票导入模板.csv";
-    a.click();
-    URL.revokeObjectURL(url);
-  };
 
   const confirmImport = (list: Invoice[]) => {
     if (!list.length) return;
@@ -137,16 +128,11 @@ export function ImportPanel({
             直接拖入发票原件：PDF、OFD、XML 或照片，可多选批量识别
           </p>
         </div>
-        <div className="row" style={{ gap: 16, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          {hasData && onClear && (
-            <button className="btn--text" onClick={onClear} style={{ color: "#B42318" }}>
-              清空数据
-            </button>
-          )}
-          <button className="btn--text" onClick={downloadTemplate}>
-            下载汇总表模板
+        {hasData && onClear && (
+          <button className="btn--text" onClick={onClear} style={{ color: "#B42318" }}>
+            清空数据
           </button>
-        </div>
+        )}
       </div>
 
       <div className="import-tabs">

@@ -1822,37 +1822,27 @@ a {
 }
 
 /* ==========================================================
-   工作台：左栏输入 / 右栏结果
+   工作台：单列瀑布流（导入 → 结果）
    ========================================================== */
 .workspace {
-  display: grid;
-  grid-template-columns: 396px minmax(0, 1fr);
-  gap: 28px;
-  max-width: 1240px;
+  max-width: var(--max);
   margin: 0 auto;
-  padding: 28px var(--gutter) 40px;
-  align-items: start;
+  padding: 0 var(--gutter) 24px;
+}
+
+.pane-aside,
+.pane-main {
+  display: block;
+  min-width: 0;
 }
 
 .pane-aside {
-  position: sticky;
-  top: 72px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-width: 0;
+  padding-top: 28px;
 }
 
-.pane-main {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 28px;
-}
-
-/* 右栏里沿用 section 的语义，但去掉整页式的留白与底色 */
+/* 单列后 section 恢复自己的留白，底色统一交给卡片 */
 .pane-main .section {
-  padding: 0;
+  padding: 52px 0;
   background: transparent;
 }
 
@@ -1865,24 +1855,11 @@ a {
   margin-bottom: 22px;
 }
 
-.pane-aside .card--pad-lg {
-  padding: 20px;
-}
-
-.pane-aside .guide {
-  grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
-}
-
-.pane-aside .grid--2 {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-/* 左栏的报表列表 */
+/* 报表列表：全宽后按卡片并排 */
 .aside-list {
   margin-top: 16px;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 10px;
 }
 
@@ -1939,26 +1916,48 @@ a {
   text-align: center;
 }
 
-.card--aside {
-  padding: 20px;
-}
-
 .btn--sm {
   height: 34px;
   padding: 0 16px;
   font-size: 14px;
 }
 
-@media (max-width: 1080px) {
-  .workspace {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 24px;
-  }
+/* 底部紧凑说明，替代原来两大块手风琴 */
+.notes {
+  margin-top: 20px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-field);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.notes p {
+  font-size: 12px;
+  line-height: 1.75;
+  color: var(--ink-2);
+}
+
+.notes b {
+  font-weight: 600;
+  color: var(--ink);
+  margin-right: 4px;
+}
+
+@media (max-width: 620px) {
   .pane-aside {
-    position: static;
+    padding-top: 20px;
   }
-  .pane-aside .guide,
-  .pane-aside .grid--2 {
+  .pane-main .section {
+    padding: 40px 0;
+  }
+  .aside-list {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* 报表导入卡片（全宽瀑布流下的紧凑内边距） */
+.card--aside {
+  padding: 24px 26px;
 }

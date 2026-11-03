@@ -486,11 +486,7 @@ export default function Page() {
       <Nav
         module={module}
         onChange={setModule}
-        counts={{
-          invoice: invoices.length,
-          statement: statements.length,
-          tax: result.lines.length,
-        }}
+        counts={{ invoice: invoices.length, statement: statements.length }}
       />
 
       <div className="workspace">
@@ -508,21 +504,6 @@ export default function Page() {
                 hasData={invoices.length > 0 || statements.length > 0}
                 companyName={settings.companyName}
               />
-              {!hasData && (
-                <div className="guide guide--aside">
-                  {[
-                    ["01", "导入发票", "PDF / OFD / XML / 照片，可多选批量识别。"],
-                    ["02", "核对明细", "识别不确定的行会标「请核对」。"],
-                    ["03", "看税金", "切到「税金测算」，按期间算增值税与附加税。"],
-                  ].map(([num, title, desc]) => (
-                    <div className="guide__item" key={num}>
-                      <span className="guide__num num">{num}</span>
-                      <span className="guide__title">{title}</span>
-                      <span className="micro">{desc}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           )}
 
@@ -540,39 +521,11 @@ export default function Page() {
             </div>
           )}
 
-          {module === "tax" && (
-            <div className="card card--aside">
-              <h2 className="h3">税金测算</h2>
-              <p className="micro" style={{ marginTop: 8 }}>
-                {periodText(activePeriod, dimension)} ·{" "}
-                {settings.taxpayer === "general" ? "一般纳税人" : "小规模纳税人"}
-              </p>
-              <div className="row" style={{ gap: 12, marginTop: 16, flexWrap: "wrap" }}>
-                <PeriodBar
-                  dimension={dimension}
-                  periods={periods}
-                  value={activePeriod}
-                  onDimension={changeDimension}
-                  onChange={setPeriod}
-                />
-              </div>
-              <button
-                className="btn btn--primary"
-                style={{ marginTop: 16, width: "100%" }}
-                onClick={exportWorkbookFile}
-              >
-                导出申报底稿
-              </button>
-              <p className="micro" style={{ marginTop: 12, lineHeight: 1.7 }}>
-                底稿含发票明细、分类汇总、税金测算、留抵台账；已导入报表时一并附上三张报表。
-              </p>
-            </div>
-          )}
         </aside>
 
         {/* ---------------- 右栏：当前模块的结果区 ---------------- */}
         <div className="pane-main">
-                    {module === "invoice" && (
+                    {module === "invoice" && hasData && (
             <>
 {/* ============ 总览 ============ */}
           <section className="section" id="overview">
@@ -701,7 +654,7 @@ export default function Page() {
             </>
           )}
 
-                    {module === "invoice" && (
+                    {module === "invoice" && hasData && (
             <>
 {/* ============ 明细 ============ */}
           <section className="section section--alt" id="invoices">
@@ -825,7 +778,7 @@ export default function Page() {
             </>
           )}
 
-                    {module === "invoice" && (
+                    {module === "invoice" && hasData && (
             <>
 {/* ============ 分类汇总 ============ */}
           <section className="section" id="summary">
@@ -1007,7 +960,7 @@ export default function Page() {
             </section>
           )}
 
-                    {module === "tax" && (
+          {hasData && (
             <>
 {/* ============ 税金 ============ */}
           <section className="section section--alt" id="tax">
@@ -1022,6 +975,9 @@ export default function Page() {
                   </p>
                 </div>
                 <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
+                  <button className="btn btn--ghost" onClick={exportWorkbookFile}>
+                    导出申报底稿
+                  </button>
                   <PeriodBar
                     dimension={dimension}
                     periods={periods}
@@ -1148,11 +1104,7 @@ export default function Page() {
               )}
             </div>
           </section>
-            </>
-          )}
 
-                    {module === "tax" && (
-            <>
 {/* ============ 参数 ============ */}
           <section className="section" id="params">
             <div className="wrap">
@@ -1174,48 +1126,15 @@ export default function Page() {
                 </div>
               </Reveal>
 
-              <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 20 }}>
-                <Reveal delay={60}>
-                  <Accordion title="计算口径" hint="展开查看">
-                    <div className="grid grid--2" style={{ gap: 24 }}>
-                      <div>
-                        <p className="body">增值税（一般纳税人）</p>
-                        <p className="micro" style={{ marginTop: 8, lineHeight: 1.7 }}>
-                          应纳增值税 = 销项税额 − 可抵扣进项税额 − 期初留抵税额。进项税额只统计「已勾选」的专票，负数结转下期留抵。
-                        </p>
-                      </div>
-                      <div>
-                        <p className="body">附加税费</p>
-                        <p className="micro" style={{ marginTop: 8, lineHeight: 1.7 }}>
-                          城建税、教育费附加、地方教育附加以实际缴纳的增值税为计税依据，税率 7% / 5% / 1%、3%、2%，小型微利企业减半。
-                        </p>
-                      </div>
-                      <div>
-                        <p className="body">印花税</p>
-                        <p className="micro" style={{ marginTop: 8, lineHeight: 1.7 }}>
-                          买卖合同按不含税价款万分之三计征，以进销项合同金额合计为基数。
-                        </p>
-                      </div>
-                      <div>
-                        <p className="body">企业所得税</p>
-                        <p className="micro" style={{ marginTop: 8, lineHeight: 1.7 }}>
-                          导入利润表后按账簿「利润总额」× 税率计算；未导入时退回「收入 − 成本 − 期间费用 − 税金」估算。小型微利企业适用 5% 实际税负，不含纳税调整。
-                        </p>
-                      </div>
-                    </div>
-                  </Accordion>
-                </Reveal>
-
-                <Reveal delay={100}>
-                  <Accordion title="数据与合规说明" hint="展开查看">
-                    <div className="warn-box">
-                      本工具用于内部测算与核对，不构成税务意见，实际申报请以电子税务局数据与主管税务机关口径为准。
-                      数据只保存在当前标签页（浏览器会话存储），刷新不丢、关闭标签页即由浏览器清除，不写入磁盘，也不会上传任何服务器。
-                      需要留档请用「导出明细 / 导出申报底稿 / 报表导出」另存文件。
-                      消费税、房产税、城镇土地使用税、个人所得税代扣代缴等请在「其他税费」手工填列。
-                    </div>
-                  </Accordion>
-                </Reveal>
+              <div className="notes">
+                <p>
+                  <b>口径</b>：增值税 = 销项 − 可抵扣进项 − 期初留抵；附加税费以实缴增值税为基数（小微减半）；
+                  印花税按购销合同万分之三；企业所得税有利润表时取账簿利润总额，否则按发票毛利估算。
+                </p>
+                <p>
+                  <b>合规</b>：仅供内部测算，不构成税务意见，申报以电子税务局口径为准。数据只在当前标签页，关闭即清除；
+                  消费税、房产税、个税代扣等请在「其他税费」填列。
+                </p>
               </div>
             </div>
           </section>
@@ -1237,9 +1156,6 @@ export default function Page() {
                 清空数据
               </button>
             )}
-            <a className="btn--text" href="#top" style={{ fontSize: 15 }}>
-              回到顶部
-            </a>
           </span>
         </div>
       </footer>

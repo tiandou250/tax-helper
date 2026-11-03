@@ -60,9 +60,6 @@ fs.writeFileSync(
   console.log("期间:", (await page.locator("#overview .section__head .sub").innerText()).trim());
   console.log("KPI:", await page.$$eval("#overview .grid--4 .kpi__value", (els) => els.map((e) => e.textContent.trim())));
 
-  // 留抵台账与导出按钮都在「税金测算」模块下
-  await page.getByRole("button", { name: "税金测算" }).click();
-  await page.waitForTimeout(900);
   const ledger = await page.$$eval(".table--tax tbody tr", (rows) =>
     rows.map((r) => r.innerText.replace(/\s+/g, " ")),
   );
@@ -76,8 +73,6 @@ fs.writeFileSync(
   const wb = XLSX.readFile(file);
   console.log("工作簿:", wb.SheetNames.join(" / "));
 
-  await page.getByRole("button", { name: "发票" }).click();
-  await page.waitForTimeout(700);
   const csvDl = page.waitForEvent("download");
   await page.locator("#summary .btn--text").first().click();
   console.log("CSV:", (await csvDl).suggestedFilename());
