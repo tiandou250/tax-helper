@@ -9,6 +9,7 @@ import { InvoiceModal } from "@/components/modals";
 import { SettingsPanel } from "@/components/settings";
 import { ImportPanel } from "@/components/import-panel";
 import { StatementAnalysis, StatementImport } from "@/components/statements";
+import { InvoiceInsights, StatementInsights } from "@/components/insights";
 import { ClearDialog } from "@/components/confirm";
 import { BackToTop, ScrollProgress } from "@/components/scroll";
 import { DEFAULT_SETTINGS, type Invoice, type TaxSettings } from "@/lib/types";
@@ -948,7 +949,7 @@ export default function Page() {
           )}
 
                     {module === "statement" && (
-            <section className="section" id="statements">
+            <section className="section section--alt" id="statements">
               <div className="wrap">
                 <StatementAnalysis
                   docs={statements}
@@ -958,6 +959,10 @@ export default function Page() {
                 />
               </div>
             </section>
+          )}
+
+          {module === "statement" && statements.length > 0 && (
+            <StatementInsights docs={statements} period={activePeriod} />
           )}
 
           {hasData && (
@@ -1105,8 +1110,17 @@ export default function Page() {
             </div>
           </section>
 
-{/* ============ 参数 ============ */}
-          <section className="section" id="params">
+{module === "invoice" && (
+            <InvoiceInsights
+              invoices={invoices}
+              settings={settings}
+              period={activePeriod}
+              dimension={dimension}
+            />
+          )}
+
+          {/* ============ 参数 ============ */}
+          <section className={`section ${module === "invoice" ? "section--alt" : ""}`} id="params">
             <div className="wrap">
               <div className="section__head">
                 <div>
