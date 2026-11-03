@@ -473,7 +473,19 @@ export function StatementImport({
       }
     }
     setBusy(false);
-    if (out.length) setReview(out);
+
+    // 同一类型 + 同一期间只留一份（xlsx 里常有「资产负债表」和「未重分类」两版）
+    const seen = new Set<string>();
+    const unique = out.filter((d) => {
+      const k = `${d.kind}|${d.period}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    const dup = out.length - unique.length;
+
+    if (unique.length) setReview(unique);
+    if (dup > 0) notify(`已跳过 ${dup} 份同期间重复报表`);
     if (failed.length) notify(`${failed.length} 个文件没识别出报表：${failed[0]}`);
   };
 
