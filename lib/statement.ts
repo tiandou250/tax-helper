@@ -51,7 +51,18 @@ export const BALANCE_LINES: LineDef[] = [
   { key: "capital", label: "实收资本", aliases: ["实收资本", "股本", "实收资本（或股本）"] },
   { key: "retained", label: "未分配利润", aliases: ["未分配利润"] },
   { key: "totalEquity", label: "所有者权益合计", aliases: ["所有者权益合计", "股东权益合计"] },
-  { key: "totalLiabEquity", label: "负债和所有者权益总计", aliases: ["负债和所有者权益总计", "负债和所有者权益合计", "负债和股东权益总计"] },
+  {
+    key: "totalLiabEquity",
+    label: "负债和所有者权益总计",
+    aliases: [
+      "负债和所有者权益总计",
+      "负债和所有者权益合计",
+      "负债及所有者权益总计",
+      "负债及所有者权益合计",
+      "负债和股东权益总计",
+      "负债及股东权益总计",
+    ],
+  },
 ];
 
 /** 现金流量表 */
@@ -82,6 +93,30 @@ export const KIND_LABEL: Record<StatementKind, string> = {
   cashflow: "现金流量表",
 };
 
+/** 各表在界面与导出里展示的关键指标（顺序即展示顺序） */
+export const KEY_METRICS: Record<StatementKind, string[]> = {
+  profit: ["revenue", "cost", "taxSurcharge", "expenses", "totalProfit", "incomeTaxExpense", "netProfit"],
+  balance: ["cash", "receivable", "inventory", "totalAssets", "totalLiab", "totalEquity", "taxPayable"],
+  cashflow: ["salesCash", "taxPaid", "operatingNet", "endingCash"],
+};
+
+/** 指标名称：expenses 是派生项，其余查科目字典 */
+export function metricLabel(kind: StatementKind, key: string): string {
+  if (key === "expenses") return "期间费用合计";
+  return LINES[kind].find((l) => l.key === key)?.label ?? key;
+}
+
+/** 取关键指标金额（含派生项） */
+export function metricValue(doc: StatementDoc, key: string): number | undefined {
+  if (key === "expenses" && doc.kind === "profit") return summarizeProfit(doc).expenses;
+  return doc.items[key];
+}
+
+export interface StatementVariant {
+  label: string;
+  items: Record<string, number>;
+}
+
 export interface StatementDoc {
   id: string;
   kind: StatementKind;
@@ -89,6 +124,10 @@ export interface StatementDoc {
   period: string;
   source: string;
   items: Record<string, number>;
+  /** 取数口径（如「期末数」「本年累计」），与所选 variant 对应 */
+  variantLabel?: string;
+  /** 同一张表的不同口径：期末/年初、本月/本年累计… */
+  variants?: StatementVariant[];
   warnings: string[];
   /** 未能归类的原始行（便于核对是否漏项） */
   unmatched?: string[];
@@ -179,34 +218,53 @@ export function detectPeriod(text: string): string {
 /* ------------------------------------------------------------------ */
 
 const LABEL_HEADER = /^(项目|资产|负债和所有者权益|负债及所有者权益|负债和股东权益|所有者权益|科目|项目名称)$/;
+/**
+ * 取值列的表头。真实报表写法比想象中杂：
+ * 资产负债表常用「年初数 / 期末数」，利润表用「本月数 / 本年累计 / 上年累计」，
+ * 也有软件写「本期金额 / 上期金额」。少认一种就会退化成「取到行次」。
+ */
 const VALUE_HEADER =
-  /(期末余额|年初余额|年末余额|本期金额|本期发生额|上期金额|上期发生额|本月数|本月金额|本年累计|金额)/;
+  /(期末余额|期末数|年末余额|年末数|年初余额|年初数|本期金额|本期发生额|上期金额|上期发生额|本月数|本月金额|本月发生|本年累计数?|上年累计数?|上年同期|金额)/;
 const SKIP_HEADER = /^(行次|行号|附注|项目序号)$/;
 
-/** 优先取「本期/期末」列，其次「金额」，最后才用「上年/累计」 */
-const valuePriority = (h: string): number => {
-  if (/本期金额|本期发生额|本月数|本月金额/.test(h)) return 0;
-  if (/期末余额|年末余额/.test(h)) return 1;
-  if (/^金额$|^金额（元）$/.test(h)) return 2;
-  if (/本年累计/.test(h)) return 3;
-  if (/年初余额|上期金额|上期发生额/.test(h)) return 4;
-  return 5;
+/** 把各种表头归一到统一口径 */
+const CANON_RULES: { re: RegExp; key: string }[] = [
+  { re: /本年累计/, key: "本年累计" },
+  { re: /上年累计|上年同期/, key: "上年累计" },
+  { re: /期末(余额|数)|年末(余额|数)/, key: "期末" },
+  { re: /年初(余额|数)/, key: "年初" },
+  { re: /本月(数|金额|发生)|本期(金额|发生额)/, key: "本期" },
+  { re: /上期(金额|发生额)/, key: "上期" },
+  { re: /金额/, key: "金额" },
+];
+
+const canonColumn = (header: string): string | null => {
+  const h = header.replace(/[\s\u3000]/g, "");
+  for (const r of CANON_RULES) if (r.re.test(h)) return r.key;
+  return null;
 };
+
+/** 默认取数口径：优先「本年累计」，其次「期末」，再看「本期」 */
+const DEFAULT_ORDER = ["本年累计", "期末", "本期", "金额", "上年累计", "年初", "上期"];
 
 interface Column {
   index: number;
   role: "label" | "value" | "skip";
   header: string;
-  priority: number;
+  /** 归一后的口径名，如「期末」「本年累计」 */
+  canon: string | null;
+  /** 原表头文字，用于在界面上显示「期末数 / 本年累计」 */
+  raw: string;
 }
 
 function buildColumns(header: string[]): Column[] {
   return header.map((h, index) => {
-    const t = String(h ?? "").replace(/[\s\u3000]/g, "");
-    if (SKIP_HEADER.test(t)) return { index, role: "skip" as const, header: t, priority: 9 };
-    if (LABEL_HEADER.test(t)) return { index, role: "label" as const, header: t, priority: 9 };
-    if (VALUE_HEADER.test(t)) return { index, role: "value" as const, header: t, priority: valuePriority(t) };
-    return { index, role: "skip" as const, header: t, priority: 9 };
+    const raw = String(h ?? "").trim();
+    const t = raw.replace(/[\s\u3000]/g, "");
+    if (SKIP_HEADER.test(t)) return { index, role: "skip" as const, header: t, canon: null, raw };
+    if (LABEL_HEADER.test(t)) return { index, role: "label" as const, header: t, canon: null, raw };
+    if (VALUE_HEADER.test(t)) return { index, role: "value" as const, header: t, canon: canonColumn(t), raw };
+    return { index, role: "skip" as const, header: t, canon: null, raw };
   });
 }
 
@@ -226,18 +284,26 @@ export function parseStatementRows(rows: string[][], source: string): StatementD
   if (!kind) return null;
 
   const headerIdx = findHeaderRow(grid);
-  const items: Record<string, number> = {};
   const unmatched: string[] = [];
   const warnings: string[] = [];
 
-  const put = (key: string, value: number) => {
-    if (!(key in items)) items[key] = round2(value);
+  /** 口径 → 科目金额。同一口径可能出现在左右两栏，按列归并 */
+  const buckets = new Map<string, Record<string, number>>();
+  const labels: Record<string, string> = {};
+
+  const put = (canon: string, key: string, value: number) => {
+    const bucket = buckets.get(canon) ?? {};
+    if (!(key in bucket)) bucket[key] = round2(value);
+    buckets.set(canon, bucket);
   };
 
   if (headerIdx >= 0) {
     const cols = buildColumns(grid[headerIdx]);
     const labelCols = cols.filter((c) => c.role === "label").map((c) => c.index);
-    const valueCols = cols.filter((c) => c.role === "value").sort((a, b) => a.priority - b.priority);
+    const valueCols = cols.filter((c) => c.role === "value" && c.canon);
+
+    // 记录每个口径在表里的原始写法，界面上显示「期末数」而不是「期末」
+    for (const c of valueCols) if (c.canon && !labels[c.canon]) labels[c.canon] = c.raw;
 
     for (let r = headerIdx + 1; r < grid.length; r++) {
       const row = grid[r];
@@ -248,30 +314,25 @@ export function parseStatementRows(rows: string[][], source: string): StatementD
         const nextLabel = labelsInRow[n + 1] ?? Infinity;
         // 只在「本标签列」与「下一个标签列」之间取数，避免资产负债表左右两栏串位
         const candidates = valueCols.filter((c) => c.index > labelIdx && c.index < nextLabel);
-        let value: number | undefined;
+        let hit = false;
         for (const c of candidates) {
           const v = parseAmount(row[c.index] ?? "");
-          if (v !== undefined) {
-            value = v;
-            break;
-          }
+          if (v === undefined) continue;
+          hit = true;
+          if (key && c.canon) put(c.canon, key, v);
         }
-        if (key && value !== undefined) put(key, value);
-        else if (!key && label.trim() && labelsInRow.length > 0) {
-          const n2 = parseAmount(row[candidates[0]?.index ?? -1] ?? "");
-          if (n2 !== undefined && n2 !== 0) unmatched.push(`${label.trim()}`);
-        }
+        if (!key && hit && label.trim()) unmatched.push(label.trim());
       });
     }
   } else {
-    // 无表头：逐行找「科目名 + 紧随其后的数字」
+    // 无表头：逐行找「科目名 + 紧随其后的数字」，统一放进「金额」口径
     for (const row of grid) {
       if (row.length === 1) {
         const m = row[0].match(/^(.{2,30}?)[：:]\s*([(（]?-?[\d,]+(?:\.\d+)?[)）]?)\s*$/);
         if (m) {
           const key = matchKey(kind, m[1]);
           const v = parseAmount(m[2]);
-          if (key && v !== undefined) put(key, v);
+          if (key && v !== undefined) put("金额", key, v);
         }
         continue;
       }
@@ -281,19 +342,39 @@ export function parseStatementRows(rows: string[][], source: string): StatementD
         for (let j = i + 1; j < Math.min(i + 4, row.length); j++) {
           const v = parseAmount(row[j]);
           if (v !== undefined) {
-            put(key, v);
+            put("金额", key, v);
             break;
           }
         }
       });
     }
-    if (Object.keys(items).length === 0) {
-      warnings.push("没能在文件里找到可识别的科目行，请确认导出的是标准三表，或改用「手工录入」。");
+    labels["金额"] = "金额";
+    if (buckets.size === 0) {
+      warnings.push("没能在文件里找到可识别的科目行，请确认导出的是标准三表，或改用「手工填入」。");
     }
   }
 
-  if (Object.keys(items).length === 0) return null;
+  // 按默认优先级排序口径，第一个作为默认取数
+  const order = (c: string) => {
+    const i = DEFAULT_ORDER.indexOf(c);
+    return i < 0 ? 99 : i;
+  };
+  const variants: StatementVariant[] = [...buckets.entries()]
+    .filter(([, items]) => Object.keys(items).length > 0)
+    .sort((a, b) => order(a[0]) - order(b[0]))
+    .map(([canon, items]) => ({ label: labels[canon] ?? canon, items }));
+
+  if (variants.length === 0) return null;
+
+  const primary = variants[0];
+  const items = primary.items;
+
   if (Object.keys(items).length < 3) warnings.push("只识别到少量科目，建议核对后再用于算税。");
+  if (variants.length > 1) {
+    warnings.push(
+      `表里有 ${variants.length} 组数据（${variants.map((v) => v.label).join(" / ")}），当前取「${primary.label}」，可在导入窗口切换。`,
+    );
+  }
 
   const period = detectPeriod(text);
   if (!period) warnings.push("没能从表头识别所属期间，已归入当前期间，可在报表卡片上修改。");
@@ -304,6 +385,8 @@ export function parseStatementRows(rows: string[][], source: string): StatementD
     period,
     source,
     items,
+    variantLabel: primary.label,
+    variants,
     warnings,
     unmatched: unmatched.slice(0, 12),
   };

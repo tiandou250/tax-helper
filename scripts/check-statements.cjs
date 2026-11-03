@@ -23,6 +23,12 @@ const near = (a, b) => typeof a === "number" && typeof b === "number" && Math.ab
   const errs = [];
   page.on("pageerror", (e) => errs.push(e.message));
   await page.goto(URL, { waitUntil: "networkidle" });
+  // 报表输入框只在「财务报表」模块下渲染
+  const stmtTab = page.getByRole("button", { name: "财务报表" });
+  if (await stmtTab.count()) {
+    await stmtTab.first().click();
+    await page.waitForTimeout(400);
+  }
   const inputs = page.locator('input[type="file"]');
   await inputs.nth(2).waitFor({ state: "attached", timeout: 60000 });
   await inputs.nth(2).setInputFiles(manifest.map((m) => path.join(DIR, m.file)));

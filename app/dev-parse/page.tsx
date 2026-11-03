@@ -99,6 +99,8 @@ export default function DevParse() {
           kind: d.kind,
           period: d.period,
           itemCount: Object.keys(d.items).length,
+          variant: d.variantLabel,
+          variants: (d.variants ?? []).map((v) => v.label),
           items: d.items,
           profit: d.kind === "profit" ? summarizeProfit(d) : undefined,
           warnings: d.warnings,

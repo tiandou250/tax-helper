@@ -1,14 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Nav } from "@/components/nav";
+import { Nav, type ModuleKey } from "@/components/nav";
 import { CountUp, Reveal } from "@/components/motion";
 import { MeterList, MonthlyBars, RateStack, TaxBars } from "@/components/charts";
 import { InvoiceTable, TaxTable } from "@/components/tables";
 import { InvoiceModal } from "@/components/modals";
 import { SettingsPanel } from "@/components/settings";
 import { ImportPanel } from "@/components/import-panel";
-import { StatementSection } from "@/components/statements";
+import { StatementAnalysis, StatementImport } from "@/components/statements";
 import { ClearDialog } from "@/components/confirm";
 import { BackToTop, ScrollProgress } from "@/components/scroll";
 import { DEFAULT_SETTINGS, type Invoice, type TaxSettings } from "@/lib/types";
@@ -154,6 +154,7 @@ export default function Page() {
   const [toast, setToast] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [showClear, setShowClear] = useState(false);
+  const [module, setModule] = useState<ModuleKey>("invoice");
   const [editing, setEditing] = useState<Invoice | null>(null);
   const [dirFilter, setDirFilter] = useState<"all" | "output" | "input">("all");
   const [kindFilter, setKindFilter] = useState<"all" | "special" | "ordinary">("all");
@@ -390,9 +391,26 @@ export default function Page() {
       period: d.period || fallback,
       id: `${stamp}-${i}`,
     }));
-    setStatements((prev) => [...normalized, ...prev]);
-    const kinds = [...new Set(normalized.map((d) => d.kind))].length;
-    notify(`已导入 ${normalized.length} 份报表（${kinds} 类）`);
+    // 同一类型 + 同一期间只保留一份（一个 xlsx 常同时有「资产负债表」和「未重分类」版）
+    const seen = new Set<string>();
+    const unique = normalized.filter((d) => {
+      const k = `${d.kind}|${d.period}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    const dropped = normalized.length - unique.length;
+
+    setStatements((prev) => {
+      const keys = new Set(unique.map((d) => `${d.kind}|${d.period}`));
+      return [...unique, ...prev.filter((d) => !keys.has(`${d.kind}|${d.period}`))];
+    });
+    const kinds = [...new Set(unique.map((d) => d.kind))].length;
+    notify(
+      dropped > 0
+        ? `已导入 ${unique.length} 份报表（${kinds} 类），跳过 ${dropped} 份同期间重复表`
+        : `已导入 ${unique.length} 份报表（${kinds} 类）`,
+    );
     const p = normalized.find((d) => d.period)?.period;
     if (p) {
       if (dimension === "month") setPeriod(p);
@@ -408,6 +426,16 @@ export default function Page() {
 
   const changeStatementPeriod = (id: string, p: string) =>
     setStatements((prev) => prev.map((d) => (d.id === id ? { ...d, period: p.trim() } : d)));
+
+  /** 切换取数口径（期末数 / 本年累计…），金额整表替换 */
+  const changeStatementVariant = (id: string, label: string) =>
+    setStatements((prev) =>
+      prev.map((d) => {
+        if (d.id !== id) return d;
+        const v = d.variants?.find((x) => x.label === label);
+        return v ? { ...d, variantLabel: v.label, items: v.items } : d;
+      }),
+    );
 
   /* ---------------- 清空 ---------------- */
   const clearBusiness = () => {
@@ -455,65 +483,98 @@ export default function Page() {
   return (
     <div className="page-in" id="top">
       <ScrollProgress />
-      <Nav hasData={hasData} />
+      <Nav
+        module={module}
+        onChange={setModule}
+        counts={{
+          invoice: invoices.length,
+          statement: statements.length,
+          tax: result.lines.length,
+        }}
+      />
 
-      {/* ============ 导入 ============ */}
-      <section className="section section--import" id="import">
-        <div className="wrap">
-          <Reveal>
-            <ImportPanel
-              onImport={addInvoices}
-              onManual={() => {
-                setEditing(null);
-                setShowForm(true);
-              }}
-              onClear={() => setShowClear(true)}
-              hasData={invoices.length > 0 || statements.length > 0}
-              companyName={settings.companyName}
-            />
-          </Reveal>
-
-          {!hasData && (
-            <Reveal delay={80}>
-              <div className="guide">
-                {[
-                  ["01", "导入发票", "拖入 PDF / OFD / XML 原件或照片，支持多选批量识别。"],
-                  ["02", "核对明细", "识别不确定的行会标「请核对」；进项专票默认已勾选。"],
-                  ["03", "查看税金", "按月、季、年算出增值税与附加税；再导入利润表，所得税改按账簿利润总额。"],
-                ].map(([num, title, desc]) => (
-                  <div className="guide__item" key={num}>
-                    <span className="guide__num num">{num}</span>
-                    <span className="guide__title">{title}</span>
-                    <span className="micro">{desc}</span>
-                  </div>
-                ))}
-              </div>
-            </Reveal>
+      <div className="workspace">
+        {/* ---------------- 左栏：当前模块的输入区 ---------------- */}
+        <aside className="pane-aside">
+          {module === "invoice" && (
+            <div id="import">
+              <ImportPanel
+                onImport={addInvoices}
+                onManual={() => {
+                  setEditing(null);
+                  setShowForm(true);
+                }}
+                onClear={() => setShowClear(true)}
+                hasData={invoices.length > 0 || statements.length > 0}
+                companyName={settings.companyName}
+              />
+              {!hasData && (
+                <div className="guide guide--aside">
+                  {[
+                    ["01", "导入发票", "PDF / OFD / XML / 照片，可多选批量识别。"],
+                    ["02", "核对明细", "识别不确定的行会标「请核对」。"],
+                    ["03", "看税金", "切到「税金测算」，按期间算增值税与附加税。"],
+                  ].map(([num, title, desc]) => (
+                    <div className="guide__item" key={num}>
+                      <span className="guide__num num">{num}</span>
+                      <span className="guide__title">{title}</span>
+                      <span className="micro">{desc}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
-        </div>
-      </section>
 
-      {/* ============ 财务报表（不依赖发票，始终可见） ============ */}
-      <section className="section section--alt" id="statements">
-        <div className="wrap">
-          <Reveal>
-            <StatementSection
+          {module === "statement" && (
+            <div id="statement-import">
+            <StatementImport
               docs={statements}
-              activePeriod={activePeriod}
-              tax={result}
-              diffs={diffs}
+              period={activePeriod}
               onImport={addStatements}
               onRemove={removeStatement}
               onPeriodChange={changeStatementPeriod}
+              onVariantChange={changeStatementVariant}
               notify={notify}
             />
-          </Reveal>
-        </div>
-      </section>
+            </div>
+          )}
 
-      {hasData && (
-        <>
-          {/* ============ 总览 ============ */}
+          {module === "tax" && (
+            <div className="card card--aside">
+              <h2 className="h3">税金测算</h2>
+              <p className="micro" style={{ marginTop: 8 }}>
+                {periodText(activePeriod, dimension)} ·{" "}
+                {settings.taxpayer === "general" ? "一般纳税人" : "小规模纳税人"}
+              </p>
+              <div className="row" style={{ gap: 12, marginTop: 16, flexWrap: "wrap" }}>
+                <PeriodBar
+                  dimension={dimension}
+                  periods={periods}
+                  value={activePeriod}
+                  onDimension={changeDimension}
+                  onChange={setPeriod}
+                />
+              </div>
+              <button
+                className="btn btn--primary"
+                style={{ marginTop: 16, width: "100%" }}
+                onClick={exportWorkbookFile}
+              >
+                导出申报底稿
+              </button>
+              <p className="micro" style={{ marginTop: 12, lineHeight: 1.7 }}>
+                底稿含发票明细、分类汇总、税金测算、留抵台账；已导入报表时一并附上三张报表。
+              </p>
+            </div>
+          )}
+        </aside>
+
+        {/* ---------------- 右栏：当前模块的结果区 ---------------- */}
+        <div className="pane-main">
+                    {module === "invoice" && (
+            <>
+{/* ============ 总览 ============ */}
           <section className="section" id="overview">
             <div className="wrap">
               <div className="section__head">
@@ -637,8 +698,12 @@ export default function Page() {
               </div>
             </div>
           </section>
+            </>
+          )}
 
-          {/* ============ 明细 ============ */}
+                    {module === "invoice" && (
+            <>
+{/* ============ 明细 ============ */}
           <section className="section section--alt" id="invoices">
             <div className="wrap">
               <div className="section__head">
@@ -757,8 +822,12 @@ export default function Page() {
               </p>
             </div>
           </section>
+            </>
+          )}
 
-          {/* ============ 分类汇总 ============ */}
+                    {module === "invoice" && (
+            <>
+{/* ============ 分类汇总 ============ */}
           <section className="section" id="summary">
             <div className="wrap">
               <div className="section__head">
@@ -922,8 +991,25 @@ export default function Page() {
               </div>
             </div>
           </section>
+            </>
+          )}
 
-          {/* ============ 税金 ============ */}
+                    {module === "statement" && (
+            <section className="section" id="statements">
+              <div className="wrap">
+                <StatementAnalysis
+                  docs={statements}
+                  activePeriod={activePeriod}
+                  tax={result}
+                  diffs={diffs}
+                />
+              </div>
+            </section>
+          )}
+
+                    {module === "tax" && (
+            <>
+{/* ============ 税金 ============ */}
           <section className="section section--alt" id="tax">
             <div className="wrap">
               <div className="section__head">
@@ -936,9 +1022,6 @@ export default function Page() {
                   </p>
                 </div>
                 <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
-                  <button className="btn btn--ghost" onClick={exportWorkbookFile}>
-                    导出申报底稿
-                  </button>
                   <PeriodBar
                     dimension={dimension}
                     periods={periods}
@@ -1065,8 +1148,12 @@ export default function Page() {
               )}
             </div>
           </section>
+            </>
+          )}
 
-          {/* ============ 参数 ============ */}
+                    {module === "tax" && (
+            <>
+{/* ============ 参数 ============ */}
           <section className="section" id="params">
             <div className="wrap">
               <div className="section__head">
@@ -1132,8 +1219,10 @@ export default function Page() {
               </div>
             </div>
           </section>
-        </>
-      )}
+            </>
+          )}
+        </div>
+      </div>
 
       <footer className="footer">
         <div className="wrap footer__inner">

@@ -7,19 +7,235 @@ import { periodLabel } from "@/lib/period";
 import type { TaxResult } from "@/lib/tax";
 import {
   KIND_LABEL as STMT_LABEL,
+  KEY_METRICS,
   LINES,
   manualStatement,
+  metricLabel,
+  metricValue,
   parseStatementFile,
   parseStatementText,
   pickStatements,
-  summarizeProfit,
   type DiffRow,
   type StatementDoc,
   type StatementKind,
 } from "@/lib/statement";
 
 /* ------------------------------------------------------------------ */
-/* 手工录入 / 粘贴                                                     */
+/* 导入后的「核对窗口」                                                 */
+/* ------------------------------------------------------------------ */
+
+interface Draft {
+  key: string;
+  doc: StatementDoc;
+  include: boolean;
+  kind: StatementKind;
+  period: string;
+  variantIdx: number;
+  values: Record<string, string>;
+}
+
+const draftOf = (doc: StatementDoc, i: number): Draft => ({
+  key: `${doc.id}-${i}`,
+  doc,
+  include: true,
+  kind: doc.kind,
+  period: doc.period,
+  variantIdx: 0,
+  values: Object.fromEntries(Object.entries(doc.items).map(([k, v]) => [k, String(v)])),
+});
+
+function ReviewModal({
+  docs,
+  onClose,
+  onConfirm,
+}: {
+  docs: StatementDoc[];
+  onClose: () => void;
+  onConfirm: (docs: StatementDoc[]) => void;
+}) {
+  const [drafts, setDrafts] = useState<Draft[]>(() => docs.map(draftOf));
+  const [active, setActive] = useState(0);
+  const cur = drafts[active];
+
+  const patch = (key: string, next: Partial<Draft>) =>
+    setDrafts((prev) => prev.map((d) => (d.key === key ? { ...d, ...next } : d)));
+
+  /** 切换取数口径：整表换成该口径的原始数据 */
+  const switchVariant = (idx: number) => {
+    const v = cur.doc.variants?.[idx];
+    if (!v) return;
+    patch(cur.key, {
+      variantIdx: idx,
+      values: Object.fromEntries(Object.entries(v.items).map(([k, val]) => [k, String(val)])),
+    });
+  };
+
+  const confirm = () => {
+    const out: StatementDoc[] = [];
+    for (const d of drafts) {
+      if (!d.include) continue;
+      const items: Record<string, number> = {};
+      for (const [k, v] of Object.entries(d.values)) {
+        const n = parseAmount(v);
+        if (n !== undefined) items[k] = n;
+      }
+      out.push({
+        ...d.doc,
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        kind: d.kind,
+        period: d.period.trim(),
+        items,
+        variantLabel: d.doc.variants?.[d.variantIdx]?.label,
+      });
+    }
+    onConfirm(out);
+  };
+
+  const filled = cur ? Object.values(cur.values).filter((v) => parseAmount(v) !== undefined).length : 0;
+
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="modal modal--wide" onClick={(e) => e.stopPropagation()}>
+        <div className="modal__head">
+          <div>
+            <h3 className="h3">核对识别结果</h3>
+            <p className="micro" style={{ marginTop: 8 }}>
+              共识别 {docs.length} 份报表，确认无误后再导入；金额可直接改
+            </p>
+          </div>
+          <button className="close" onClick={onClose}>
+            关闭
+          </button>
+        </div>
+
+        {drafts.length > 1 && (
+          <div className="seg" style={{ marginBottom: 16, flexWrap: "wrap" }}>
+            {drafts.map((d, i) => (
+              <button
+                key={d.key}
+                className={`seg__item ${i === active ? "is-active" : ""}`}
+                onClick={() => setActive(i)}
+              >
+                {STMT_LABEL[d.kind]}
+                {d.period ? ` · ${d.period}` : ""}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {cur && (
+          <>
+            <div className="row row--wrap" style={{ gap: 12, marginBottom: 14 }}>
+              <label className="field" style={{ maxWidth: 150 }}>
+                <span className="field__label">报表类型</span>
+                <select
+                  className="select"
+                  value={cur.kind}
+                  onChange={(e) => patch(cur.key, { kind: e.target.value as StatementKind })}
+                >
+                  {(["profit", "balance", "cashflow"] as StatementKind[]).map((k) => (
+                    <option key={k} value={k}>
+                      {STMT_LABEL[k]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field" style={{ maxWidth: 130 }}>
+                <span className="field__label">所属期间</span>
+                <input
+                  className="input"
+                  placeholder="2025-12"
+                  value={cur.period}
+                  onChange={(e) => patch(cur.key, { period: e.target.value })}
+                />
+              </label>
+              {(cur.doc.variants?.length ?? 0) > 1 && (
+                <label className="field" style={{ maxWidth: 200 }}>
+                  <span className="field__label">取数口径</span>
+                  <select
+                    className="select"
+                    value={cur.variantIdx}
+                    onChange={(e) => switchVariant(Number(e.target.value))}
+                  >
+                    {cur.doc.variants!.map((v, i) => (
+                      <option key={v.label} value={i}>
+                        {v.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label className="row" style={{ gap: 8, alignSelf: "flex-end", paddingBottom: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={cur.include}
+                  onChange={(e) => patch(cur.key, { include: e.target.checked })}
+                />
+                <span className="micro">导入这一份</span>
+              </label>
+            </div>
+
+            <div className="review-scroll">
+              <table className="table table--mini">
+                <thead>
+                  <tr>
+                    <th>科目</th>
+                    <th className="r" style={{ width: 180 }}>
+                      金额
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {LINES[cur.kind].map((l) => {
+                    if (!(l.key in cur.values)) return null;
+                    return (
+                      <tr key={l.key}>
+                        <td>{l.label}</td>
+                        <td className="r">
+                          <input
+                            className="input input--num"
+                            style={{ height: 30, textAlign: "right", fontSize: 13 }}
+                            value={cur.values[l.key]}
+                            onChange={(e) =>
+                              patch(cur.key, { values: { ...cur.values, [l.key]: e.target.value } })
+                            }
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <p className="micro" style={{ marginTop: 12 }}>
+              已识别 {filled} 个科目
+              {cur.doc.source ? ` · 来源 ${cur.doc.source}` : ""}
+            </p>
+
+            {cur.doc.unmatched && cur.doc.unmatched.length > 0 && (
+              <div className="warn-box" style={{ marginTop: 12 }}>
+                这些行没归到标准科目（不计入算税）：{cur.doc.unmatched.slice(0, 8).join("、")}
+              </div>
+            )}
+          </>
+        )}
+
+        <div className="modal__actions">
+          <button className="btn btn--ghost" onClick={onClose}>
+            取消
+          </button>
+          <button className="btn btn--primary" onClick={confirm}>
+            确认导入{drafts.length > 1 ? `（${drafts.filter((d) => d.include).length} 份）` : ""}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* 手工填写 / 粘贴                                                     */
 /* ------------------------------------------------------------------ */
 
 function ManualModal({
@@ -61,7 +277,7 @@ function ManualModal({
       <div className="modal modal--wide" onClick={(e) => e.stopPropagation()}>
         <div className="modal__head">
           <div>
-            <h3 className="h3">手工录入财务报表</h3>
+            <h3 className="h3">手工填入财务报表</h3>
             <p className="micro" style={{ marginTop: 8 }}>
               只填关键科目即可，留空的按 0 处理
             </p>
@@ -156,7 +372,6 @@ function PasteModal({
   onSave: (docs: StatementDoc[]) => void;
 }) {
   const [text, setText] = useState("");
-  const [error, setError] = useState("");
   const parsed = useMemo(() => (text.trim() ? parseStatementText(text, "粘贴文本") : null), [text]);
 
   return (
@@ -166,7 +381,7 @@ function PasteModal({
           <div>
             <h3 className="h3">粘贴财务报表</h3>
             <p className="micro" style={{ marginTop: 8 }}>
-              从 Excel 或 PDF 里复制后直接粘贴，支持「科目 + 金额」两列或「营业收入：1,000,000」逐行写法
+              从 Excel 或 PDF 复制后直接粘贴，支持「科目 + 金额」两列或「营业收入：1,000,000」逐行写法
             </p>
           </div>
           <button className="close" onClick={onClose}>
@@ -179,15 +394,13 @@ function PasteModal({
           rows={12}
           value={text}
           placeholder={"项目\t本期金额\n营业收入\t1200000\n营业成本\t700000\n利润总额\t219000"}
-          onChange={(e) => {
-            setText(e.target.value);
-            setError("");
-          }}
+          onChange={(e) => setText(e.target.value)}
         />
 
         {parsed && (
           <div className="warn-box" style={{ marginTop: 14 }}>
-            识别为「{STMT_LABEL[parsed.kind]}」，期间 {parsed.period || "未识别"}，共 {Object.keys(parsed.items).length} 个科目。
+            识别为「{STMT_LABEL[parsed.kind]}」，期间 {parsed.period || "未识别"}，共{" "}
+            {Object.keys(parsed.items).length} 个科目。
           </div>
         )}
         {text.trim() && !parsed && (
@@ -195,7 +408,6 @@ function PasteModal({
             没能识别出报表类型，请确认内容包含「营业收入 / 资产总计 / 经营活动产生的现金流量净额」等科目名。
           </div>
         )}
-        {error && <div className="error-box" style={{ marginTop: 14 }}>{error}</div>}
 
         <div className="modal__actions">
           <button className="btn btn--ghost" onClick={onClose}>
@@ -205,14 +417,11 @@ function PasteModal({
             className="btn btn--primary"
             disabled={!parsed}
             onClick={() => {
-              if (!parsed) {
-                setError("没有可导入的内容");
-                return;
-              }
+              if (!parsed) return;
               onSave([{ ...parsed, period: parsed.period || period || new Date().toISOString().slice(0, 7) }]);
             }}
           >
-            导入
+            下一步
           </button>
         </div>
       </div>
@@ -221,46 +430,32 @@ function PasteModal({
 }
 
 /* ------------------------------------------------------------------ */
-/* 主区块                                                              */
+/* 左栏：导入                                                          */
 /* ------------------------------------------------------------------ */
 
-const CARD_FIELDS: Record<StatementKind, string[]> = {
-  profit: ["revenue", "cost", "taxSurcharge", "expenses", "totalProfit", "incomeTaxExpense", "netProfit"],
-  balance: ["cash", "receivable", "inventory", "totalAssets", "totalLiab", "totalEquity", "taxPayable"],
-  cashflow: ["salesCash", "taxPaid", "operatingNet", "endingCash"],
-};
-
-function labelOf(kind: StatementKind, key: string): string {
-  if (key === "expenses") return "期间费用合计";
-  return LINES[kind].find((l) => l.key === key)?.label ?? key;
-}
-
-export function StatementSection({
+export function StatementImport({
   docs,
-  activePeriod,
-  tax,
-  diffs,
+  period,
   onImport,
   onRemove,
   onPeriodChange,
+  onVariantChange,
   notify,
 }: {
   docs: StatementDoc[];
-  activePeriod: string;
-  tax: TaxResult;
-  diffs: DiffRow[];
+  period: string;
   onImport: (docs: StatementDoc[]) => void;
   onRemove: (id: string) => void;
   onPeriodChange: (id: string, period: string) => void;
+  onVariantChange: (id: string, label: string) => void;
   notify: (msg: string) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [paste, setPaste] = useState(false);
   const [manual, setManual] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  const current = useMemo(() => pickStatements(docs, activePeriod), [docs, activePeriod]);
+  const [review, setReview] = useState<StatementDoc[] | null>(null);
 
   const handleFiles = async (list: FileList | File[] | null) => {
     const files = Array.from(list ?? []);
@@ -278,7 +473,7 @@ export function StatementSection({
       }
     }
     setBusy(false);
-    if (out.length) onImport(out);
+    if (out.length) setReview(out);
     if (failed.length) notify(`${failed.length} 个文件没识别出报表：${failed[0]}`);
   };
 
@@ -288,33 +483,19 @@ export function StatementSection({
     downloadCsv("财务报表模板-利润表.csv", rows);
   };
 
-  const exportDoc = (doc: StatementDoc) => {
-    const rows: (string | number)[][] = [["科目", "金额"]];
-    for (const l of LINES[doc.kind]) {
-      if (doc.items[l.key] !== undefined) rows.push([l.label, doc.items[l.key]]);
-    }
-    downloadCsv(`${STMT_LABEL[doc.kind]}-${doc.period || "未标期间"}.csv`, rows);
-  };
-
-  const periodDocs = docs.filter((d) => d.kind && current[d.kind] && current[d.kind]!.id === d.id);
-
   return (
     <>
-      <div className="section__head">
-        <div>
-          <h2 className="h2">财务报表</h2>
-          <p className="sub" style={{ marginTop: 12 }}>
-            导入利润表、资产负债表、现金流量表后，企业所得税改用账簿利润总额计算，并与发票口径逐项勾稽
-          </p>
-        </div>
-        <div className="row" style={{ gap: 10 }}>
+      <div className="card card--aside">
+        <div className="row" style={{ justifyContent: "space-between", marginBottom: 4 }}>
+          <h2 className="h3">导入报表</h2>
           <button className="btn--text" onClick={downloadTemplate}>
             下载模板
           </button>
         </div>
-      </div>
+        <p className="micro" style={{ marginTop: 6 }}>
+          Excel / CSV 三表通用，自动识别类型与期间
+        </p>
 
-      <div className="card">
         <div
           className={`drop drop--sm ${over ? "is-over" : ""}`}
           onDragOver={(e) => {
@@ -328,13 +509,11 @@ export function StatementSection({
             void handleFiles(e.dataTransfer.files);
           }}
           onClick={() => inputRef.current?.click()}
-          style={{ cursor: "pointer" }}
+          style={{ cursor: "pointer", marginTop: 14 }}
         >
-          <p className="body">
-            {busy ? "正在解析…" : "把财务报表拖到这里，或点此选择文件"}
-          </p>
-          <p className="micro" style={{ marginTop: 8 }}>
-            支持 .xlsx / .xls / .csv；三张表可以放在同一个 Excel 的不同工作表里，自动识别类型与期间
+          <p className="body">{busy ? "正在解析…" : "拖入报表，或点此选择"}</p>
+          <p className="micro" style={{ marginTop: 6 }}>
+            三张表可放在同一 Excel 的不同工作表
           </p>
           <input
             ref={inputRef}
@@ -349,58 +528,125 @@ export function StatementSection({
           />
         </div>
 
-        <div className="row" style={{ gap: 12, marginTop: 16, flexWrap: "wrap" }}>
-          <button className="btn btn--ghost" onClick={() => setPaste(true)}>
+        <div className="row" style={{ gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+          <button className="btn btn--ghost btn--sm" onClick={() => setPaste(true)}>
             粘贴报表
           </button>
-          <button className="btn btn--ghost" onClick={() => setManual(true)}>
+          <button className="btn btn--ghost btn--sm" onClick={() => setManual(true)}>
             手工填表
           </button>
-          <span className="micro" style={{ alignSelf: "center" }}>
-            {docs.length > 0 ? `已导入 ${docs.length} 份` : "还没有导入财务报表"}
-          </span>
         </div>
 
         {docs.length > 0 && (
-          <div className="list" style={{ marginTop: 18 }}>
+          <div className="aside-list">
             {docs.map((d) => (
-              <div className="list__row" key={d.id} style={{ gap: 12 }}>
-                <span className="row" style={{ gap: 10, minWidth: 0 }}>
+              <div className="aside-item" key={d.id}>
+                <div className="aside-item__top">
                   <span className="tag tag--ink">{STMT_LABEL[d.kind]}</span>
+                  <button className="btn--text" onClick={() => onRemove(d.id)} style={{ fontSize: 12 }}>
+                    移除
+                  </button>
+                </div>
+                <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
                   <input
                     className="input"
-                    style={{ width: 110, height: 30, fontSize: 13 }}
+                    style={{ width: 96, height: 28, fontSize: 12 }}
                     value={d.period}
                     placeholder="2026-10"
                     onChange={(e) => onPeriodChange(d.id, e.target.value)}
                   />
-                  <span className="micro ellipsis" title={d.source} style={{ maxWidth: 240 }}>
-                    {d.source}
-                  </span>
-                  <span className="micro">{Object.keys(d.items).length} 个科目</span>
-                </span>
-                <span className="row" style={{ gap: 12 }}>
-                  <button className="btn--text" onClick={() => exportDoc(d)} style={{ fontSize: 13 }}>
-                    导出
-                  </button>
-                  <button className="btn--text" onClick={() => onRemove(d.id)} style={{ fontSize: 13 }}>
-                    移除
-                  </button>
-                </span>
+                  {(d.variants?.length ?? 0) > 1 ? (
+                    <select
+                      className="select"
+                      style={{ height: 28, fontSize: 12, width: 120 }}
+                      value={d.variantLabel ?? ""}
+                      onChange={(e) => onVariantChange(d.id, e.target.value)}
+                    >
+                      {d.variants!.map((v) => (
+                        <option key={v.label} value={v.label}>
+                          {v.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span className="micro">{d.variantLabel ?? "金额"}</span>
+                  )}
+                </div>
+                <p className="micro ellipsis" title={d.source} style={{ marginTop: 6 }}>
+                  {d.source} · {Object.keys(d.items).length} 个科目
+                </p>
               </div>
             ))}
           </div>
         )}
-
-        {periodDocs.flatMap((d) => d.warnings).slice(0, 4).map((w, i) => (
-          <div className="warn-box" style={{ marginTop: 14 }} key={`${i}-${w.slice(0, 8)}`}>
-            {w}
-          </div>
-        ))}
       </div>
 
-      {/* 三张报表的关键科目 */}
-      <div className="grid grid--3" style={{ marginTop: 20 }}>
+      {review && (
+        <ReviewModal
+          docs={review}
+          onClose={() => setReview(null)}
+          onConfirm={(list) => {
+            onImport(list);
+            setReview(null);
+          }}
+        />
+      )}
+      {paste && (
+        <PasteModal
+          period={period}
+          onClose={() => setPaste(false)}
+          onSave={(list) => {
+            setPaste(false);
+            setReview(list);
+          }}
+        />
+      )}
+      {manual && (
+        <ManualModal
+          kind="profit"
+          period={period}
+          onClose={() => setManual(false)}
+          onSave={(list) => {
+            setManual(false);
+            onImport(list);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* 右栏：分析结果                                                      */
+/* ------------------------------------------------------------------ */
+
+export function StatementAnalysis({
+  docs,
+  activePeriod,
+  tax,
+  diffs,
+}: {
+  docs: StatementDoc[];
+  activePeriod: string;
+  tax: TaxResult;
+  diffs: DiffRow[];
+}) {
+  const current = useMemo(() => pickStatements(docs, activePeriod), [docs, activePeriod]);
+
+  if (docs.length === 0) {
+    return (
+      <div className="card card--empty">
+        <p className="body">还没有导入财务报表</p>
+        <p className="micro" style={{ marginTop: 8, maxWidth: 460 }}>
+          在左侧导入利润表 / 资产负债表 / 现金流量表后，企业所得税会改用账簿利润总额计算，并与发票口径逐项勾稽。
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="grid grid--3">
         {(["profit", "balance", "cashflow"] as StatementKind[]).map((k) => {
           const doc = current[k];
           return (
@@ -410,23 +656,25 @@ export function StatementSection({
                 <span className="micro">{doc?.period ? periodLabel(doc.period) : "未导入"}</span>
               </div>
               {doc ? (
-                <div className="list" style={{ marginTop: 14 }}>
-                  {CARD_FIELDS[k].map((f) => {
-                    const value =
-                      f === "expenses" && k === "profit"
-                        ? summarizeProfit(doc).expenses
-                        : doc.items[f];
-                    if (value === undefined) return null;
-                    return (
-                      <div className="list__row" key={f}>
-                        <span className="micro" style={{ color: "var(--ink)" }}>
-                          {labelOf(k, f)}
-                        </span>
-                        <span className="num">{fmtNumber(value, 0)}</span>
-                      </div>
-                    );
-                  })}
-                </div>
+                <>
+                  <p className="micro" style={{ marginTop: 6 }}>
+                    {doc.variantLabel ? `取数：${doc.variantLabel}` : ""}
+                  </p>
+                  <div className="list" style={{ marginTop: 10 }}>
+                    {KEY_METRICS[k].map((f) => {
+                      const value = metricValue(doc, f);
+                      if (value === undefined) return null;
+                      return (
+                        <div className="list__row" key={f}>
+                          <span className="micro" style={{ color: "var(--ink)" }}>
+                            {metricLabel(k, f)}
+                          </span>
+                          <span className="num">{fmtNumber(value, 0)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
               ) : (
                 <div className="empty" style={{ marginTop: 14 }}>
                   未导入
@@ -437,12 +685,11 @@ export function StatementSection({
         })}
       </div>
 
-      {/* 勾稽核对 */}
       {diffs.length > 0 && (
         <div className="card" style={{ marginTop: 20 }}>
           <div className="row" style={{ justifyContent: "space-between", marginBottom: 4 }}>
             <h3 className="h3">报表口径与发票口径勾稽</h3>
-            <span className="micro">差异超过 1 元标黄</span>
+            <span className="micro">差异超过 1 元标红</span>
           </div>
           <div className="table-scroll">
             <table className="table table--tax">
@@ -473,32 +720,12 @@ export function StatementSection({
             </table>
           </div>
           <p className="micro" style={{ marginTop: 14 }}>
-            利润口径：{tax.profitSource === "book" ? "利润表（账簿）" : tax.profitSource === "invoice" ? "发票推算" : "无数据"}
+            利润口径：
+            {tax.profitSource === "book" ? "利润表（账簿）" : tax.profitSource === "invoice" ? "发票推算" : "无数据"}
             {tax.profitSource === "book" && ` · 利润总额 ${fmtMoney(tax.profit, 0)}`}
+            {current.profit ? ` · 当前取「${current.profit.variantLabel ?? "金额"}」` : ""}
           </p>
         </div>
-      )}
-
-      {paste && (
-        <PasteModal
-          period={activePeriod}
-          onClose={() => setPaste(false)}
-          onSave={(list) => {
-            onImport(list);
-            setPaste(false);
-          }}
-        />
-      )}
-      {manual && (
-        <ManualModal
-          kind="profit"
-          period={activePeriod}
-          onClose={() => setManual(false)}
-          onSave={(list) => {
-            onImport(list);
-            setManual(false);
-          }}
-        />
       )}
     </>
   );

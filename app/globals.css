@@ -1820,3 +1820,145 @@ a {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ==========================================================
+   工作台：左栏输入 / 右栏结果
+   ========================================================== */
+.workspace {
+  display: grid;
+  grid-template-columns: 396px minmax(0, 1fr);
+  gap: 28px;
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 28px var(--gutter) 40px;
+  align-items: start;
+}
+
+.pane-aside {
+  position: sticky;
+  top: 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.pane-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+/* 右栏里沿用 section 的语义，但去掉整页式的留白与底色 */
+.pane-main .section {
+  padding: 0;
+  background: transparent;
+}
+
+.pane-main .wrap {
+  max-width: none;
+  padding: 0;
+}
+
+.pane-main .section__head {
+  margin-bottom: 22px;
+}
+
+.pane-aside .card--pad-lg {
+  padding: 20px;
+}
+
+.pane-aside .guide {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.pane-aside .grid--2 {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* 左栏的报表列表 */
+.aside-list {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.aside-item {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-field);
+  padding: 10px 12px;
+  background: var(--bg-alt);
+}
+
+.aside-item__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 导航里的模块切换 */
+.seg--nav {
+  background: var(--bg-alt);
+}
+
+.seg__badge {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--ink-2);
+}
+
+.seg__item.is-active .seg__badge {
+  color: var(--accent);
+}
+
+/* 报表核对窗口里的科目表 */
+.review-scroll {
+  max-height: 46vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-field);
+}
+
+.review-scroll .table th {
+  position: sticky;
+  top: 0;
+  background: #fff;
+  z-index: 1;
+}
+
+.review-scroll .table td {
+  padding: 8px 12px;
+}
+
+.card--empty {
+  padding: 40px;
+  text-align: center;
+}
+
+.card--aside {
+  padding: 20px;
+}
+
+.btn--sm {
+  height: 34px;
+  padding: 0 16px;
+  font-size: 14px;
+}
+
+@media (max-width: 1080px) {
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+  .pane-aside {
+    position: static;
+  }
+  .pane-aside .guide,
+  .pane-aside .grid--2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
