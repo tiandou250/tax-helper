@@ -46,11 +46,11 @@ fs.writeFileSync(
   page.on("console", (m) => m.type() === "error" && !m.text().includes("favicon") && errors.push(m.text()));
 
   await page.goto("http://localhost:3000/", { waitUntil: "networkidle" });
-  await page.evaluate(() => localStorage.clear());
+  await page.evaluate(() => { localStorage.clear(); sessionStorage.clear(); });
   await page.reload({ waitUntil: "networkidle" });
   await page.waitForTimeout(700);
 
-  await page.locator('input[type="file"]').setInputFiles([CSV1, CSV2]);
+  await page.locator('#import input[type="file"]').setInputFiles([CSV1, CSV2]);
   await page.waitForTimeout(1400);
   console.log("队列文件数:", await page.locator(".queue__row").count());
   console.log("待导入:", (await page.locator(".import-foot .micro").innerText()).trim());

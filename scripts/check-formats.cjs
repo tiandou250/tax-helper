@@ -24,15 +24,16 @@ const FILES = [
   await page.goto("http://localhost:3000/", { waitUntil: "networkidle" });
   await page.evaluate(() => {
     localStorage.clear();
-    localStorage.setItem(
-      "piaoshui.settings.v2",
+    sessionStorage.clear();
+    sessionStorage.setItem(
+      "piaoshui.ss.settings",
       JSON.stringify({ companyName: "南京数联智能科技有限公司" }),
     );
   });
   await page.reload({ waitUntil: "networkidle" });
   await page.waitForTimeout(700);
 
-  await page.locator('input[type="file"]').setInputFiles(FILES);
+  await page.locator('#import input[type="file"]').setInputFiles(FILES);
   await page.waitForTimeout(6000);
 
   const rows = await page.$$eval(".queue__row", (els) =>
@@ -46,7 +47,7 @@ const FILES = [
   await page.locator(".import-foot .btn--primary").click();
   await page.waitForTimeout(1500);
   const data = await page.evaluate(
-    () => JSON.parse(localStorage.getItem("piaoshui.invoices.v2")) || [],
+    () => JSON.parse(sessionStorage.getItem("piaoshui.ss.invoices")) || [],
   );
   console.log("入库:");
   data.forEach((i) =>

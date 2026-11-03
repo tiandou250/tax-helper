@@ -25,10 +25,15 @@ const TAG_LABEL: Record<string, string> = {
 export function ImportPanel({
   onImport,
   onManual,
+  onClear,
+  hasData,
   companyName,
 }: {
   onImport: (invoices: Invoice[]) => void;
   onManual: () => void;
+  /** 一键清空（含发票与财务报表） */
+  onClear?: () => void;
+  hasData?: boolean;
   companyName?: string;
 }) {
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -132,9 +137,16 @@ export function ImportPanel({
             直接拖入发票原件：PDF、OFD、XML 或照片，可多选批量识别
           </p>
         </div>
-        <button className="btn--text" onClick={downloadTemplate}>
-          下载汇总表模板
-        </button>
+        <div className="row" style={{ gap: 16, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          {hasData && onClear && (
+            <button className="btn--text" onClick={onClear} style={{ color: "#B42318" }}>
+              清空数据
+            </button>
+          )}
+          <button className="btn--text" onClick={downloadTemplate}>
+            下载汇总表模板
+          </button>
+        </div>
       </div>
 
       <div className="import-tabs">
@@ -152,7 +164,7 @@ export function ImportPanel({
             粘贴表格
           </button>
         </div>
-        <span className="micro">数据只保存在本机浏览器，不会上传到服务器</span>
+        <span className="micro">数据只在本次会话，关闭标签页即清除，不会上传</span>
       </div>
 
       {mode === "file" ? (

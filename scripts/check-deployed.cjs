@@ -33,11 +33,11 @@ const FILES = [
     );
   });
   await page.reload({ waitUntil: "networkidle" });
-  await page.locator('input[type="file"]').waitFor({ state: "attached", timeout: 60000 });
+  await page.locator('#import input[type="file"]').waitFor({ state: "attached", timeout: 60000 });
   await page.waitForTimeout(1200);
   console.log("标题:", await page.title());
 
-  await page.locator('input[type="file"]').setInputFiles(FILES);
+  await page.locator('#import input[type="file"]').setInputFiles(FILES);
   await page.waitForTimeout(7000);
 
   const rows = await page.$$eval(".queue__row", (els) => els.map((e) => e.innerText.replace(/\s+/g, " ")));

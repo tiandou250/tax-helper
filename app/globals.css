@@ -615,6 +615,16 @@ a {
   text-align: center;
 }
 
+/* 财务报表导入区的紧凑拖拽框 */
+.drop--sm {
+  padding: 22px 20px;
+  text-align: center;
+}
+
+.drop--sm:hover {
+  border-color: var(--ink-3, #c7c7cc);
+}
+
 .drop--lg {
   margin-top: 16px;
   padding: 44px 24px;
@@ -1789,5 +1799,24 @@ a {
   .reveal {
     opacity: 1;
     transform: none;
+  }
+}
+
+/* 财务报表列表：窄屏允许换行，避免标签 + 期间输入 + 来源挤成横向滚动 */
+@media (max-width: 620px) {
+  #statements .list__row {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+  #statements .list__row > .row {
+    flex-wrap: wrap;
+    row-gap: 8px;
+    width: 100%;
+  }
+  #statements .list__row .micro.ellipsis {
+    max-width: 100%;
+  }
+  #statements .grid--3 {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

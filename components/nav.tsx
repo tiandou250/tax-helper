@@ -6,6 +6,7 @@ const LINKS = [
   { id: "overview", label: "总览" },
   { id: "invoices", label: "发票明细" },
   { id: "summary", label: "分类汇总" },
+  { id: "statements", label: "财务报表" },
   { id: "tax", label: "税金测算" },
   { id: "params", label: "计算参数" },
 ];

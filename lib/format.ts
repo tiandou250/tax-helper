@@ -30,3 +30,19 @@ export const fmtDate = (date: string) => (date || "").replaceAll("-", ".");
 
 export const directionLabel = (d: string) => (d === "input" ? "进项" : "销项");
 export const kindLabel = (k: string) => (k === "special" ? "专票" : "普票");
+
+/**
+ * 解析单元格里的金额。财务报表常见写法：
+ * "1,234,567.89" / "¥1,234.56" / "(1,234.56)"（负数）/ "—"（空）
+ */
+export const parseAmount = (v: unknown): number | undefined => {
+  const s = String(v ?? "").trim();
+  if (!s) return undefined;
+  if (/^[-—–－/／]+$/.test(s)) return undefined;
+  const negative = /^[（(].*[)）]$/.test(s) || s.startsWith("-") || s.startsWith("－");
+  const cleaned = s.replace(/[（()）,，\s¥￥元]/g, "").replace(/[－—]/g, "-");
+  if (!/^-?\d+(\.\d+)?$/.test(cleaned)) return undefined;
+  const n = Number(cleaned);
+  if (!isFinite(n)) return undefined;
+  return negative ? -Math.abs(n) : n;
+};

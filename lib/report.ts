@@ -2,6 +2,7 @@ import type { Invoice, TaxSettings } from "./types";
 import { isDeductible } from "./types";
 import type { LedgerRow, NamedBucket, RateBucket, TaxResult } from "./tax";
 import { periodKindOf, periodLabel } from "./tax";
+import { KIND_LABEL as STMT_LABEL, LINES, type StatementDoc } from "./statement";
 
 type Cell = string | number;
 
@@ -140,6 +141,8 @@ export interface WorkbookInput {
   categories: NamedBucket[];
   parties: NamedBucket[];
   byKind: { label: string; amount: number; tax: number; count: number }[];
+  /** 当前期间的财务报表（有则追加到工作簿） */
+  statements?: StatementDoc[];
 }
 
 export async function exportWorkbook(input: WorkbookInput) {
@@ -239,6 +242,19 @@ export async function exportWorkbook(input: WorkbookInput) {
     ]);
     ws4["!cols"] = [12, 14, 16, 14, 14, 14].map((w) => ({ wch: w }));
     XLSX.utils.book_append_sheet(wb, ws4, "留抵台账");
+  }
+
+  /* 5. 财务报表（利润表 / 资产负债表 / 现金流量表） */
+  for (const doc of input.statements ?? []) {
+    const rows: Cell[][] = [[STMT_LABEL[doc.kind], doc.period || "未标期间"], ["科目", "金额"]];
+    for (const line of LINES[doc.kind]) {
+      const v = doc.items[line.key];
+      if (v !== undefined) rows.push([line.label, v]);
+    }
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws["!cols"] = [28, 18].map((w) => ({ wch: w }));
+    const name = `${STMT_LABEL[doc.kind]}${doc.period ? `-${doc.period}` : ""}`.slice(0, 31);
+    XLSX.utils.book_append_sheet(wb, ws, name);
   }
 
   XLSX.writeFile(wb, `申报底稿-${tag}.xlsx`);

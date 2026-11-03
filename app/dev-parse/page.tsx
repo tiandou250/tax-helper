@@ -4,6 +4,7 @@ import { useState } from "react";
 import { parseDoc } from "@/lib/doc-parse";
 import { buildInvoice } from "@/lib/doc-parse";
 import { parseFiles } from "@/lib/parse";
+import { parseStatementFile, summarizeProfit, detectKind, detectPeriod } from "@/lib/statement";
 
 interface Row {
   name: string;
@@ -20,6 +21,7 @@ interface Row {
 
 export default function DevParse() {
   const [rows, setRows] = useState<Row[]>([]);
+  const [stmt, setStmt] = useState<unknown[]>([]);
   const [busy, setBusy] = useState(false);
 
   const run = async (files: FileList | null) => {
@@ -84,13 +86,56 @@ export default function DevParse() {
     setBusy(false);
   };
 
+  /** 财务报表解析（内部自查用） */
+  const runStatement = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setBusy(true);
+    const out: unknown[] = [];
+    for (const file of Array.from(files)) {
+      const docs = await parseStatementFile(file);
+      for (const d of docs) {
+        out.push({
+          file: file.name,
+          kind: d.kind,
+          period: d.period,
+          itemCount: Object.keys(d.items).length,
+          items: d.items,
+          profit: d.kind === "profit" ? summarizeProfit(d) : undefined,
+          warnings: d.warnings,
+          unmatched: d.unmatched,
+        });
+      }
+      if (docs.length === 0) {
+        const text = await file.text().catch(() => "");
+        out.push({
+          file: file.name,
+          kind: detectKind(text) ?? null,
+          period: detectPeriod(text),
+          error: "未识别为三表之一",
+        });
+      }
+    }
+    (window as unknown as { __STMT: unknown[] }).__STMT = out;
+    setStmt(out);
+    setBusy(false);
+  };
+
   return (
     <div style={{ padding: 24, fontFamily: "monospace", fontSize: 12 }}>
       <h1 style={{ fontSize: 16 }}>解析调试（内部页）</h1>
-      <input type="file" multiple onChange={(e) => run(e.target.files)} />
-      {" "}
-      <input type="file" multiple onChange={(e) => runSheet(e.target.files)} />
-      <span style={{ marginLeft: 12, color: "#6E6E73" }}>{busy ? "解析中…" : `共 ${rows.length} 份`}</span>
+      <div style={{ marginBottom: 8 }}>
+        发票：<input type="file" multiple onChange={(e) => run(e.target.files)} />{" "}
+        <input type="file" multiple onChange={(e) => runSheet(e.target.files)} />
+      </div>
+      <div>
+        报表：<input type="file" multiple onChange={(e) => runStatement(e.target.files)} />
+      </div>
+      <span style={{ marginLeft: 12, color: "#6E6E73" }}>{busy ? "解析中…" : `发票 ${rows.length} 份 · 报表 ${stmt.length} 份`}</span>
+      {stmt.length > 0 && (
+        <pre style={{ whiteSpace: "pre-wrap", background: "#f6f6f8", padding: 12 }}>
+          {JSON.stringify(stmt, null, 1)}
+        </pre>
+      )}
       <div style={{ marginTop: 16 }}>
         {rows.map((r) => (
           <details key={r.name} style={{ borderBottom: "1px solid #ddd", padding: "8px 0" }}>

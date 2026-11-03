@@ -8,6 +8,8 @@ import { InvoiceTable, TaxTable } from "@/components/tables";
 import { InvoiceModal } from "@/components/modals";
 import { SettingsPanel } from "@/components/settings";
 import { ImportPanel } from "@/components/import-panel";
+import { StatementSection } from "@/components/statements";
+import { ClearDialog } from "@/components/confirm";
 import { BackToTop, ScrollProgress } from "@/components/scroll";
 import { DEFAULT_SETTINGS, type Invoice, type TaxSettings } from "@/lib/types";
 import {
@@ -29,13 +31,18 @@ import {
   exportWorkbook,
 } from "@/lib/report";
 import { fmtMoney, fmtNumber, directionLabel, kindLabel } from "@/lib/format";
-
-const LS = {
-  invoices: "piaoshui.invoices.v2",
-  settings: "piaoshui.settings.v2",
-  period: "piaoshui.period.v2",
-  dimension: "piaoshui.dim.v2",
-};
+import {
+  LEGACY,
+  SS,
+  clearAllKeys,
+  clearBusinessKeys,
+  migrateLegacy,
+  purgeLegacy,
+  readSSString,
+  removeSS,
+  writeSS,
+} from "@/lib/storage";
+import { pickStatements, reconcile, type StatementDoc } from "@/lib/statement";
 
 const DIM_LABEL: Record<PeriodKind, string> = { month: "按月", quarter: "按季", year: "按年" };
 
@@ -139,12 +146,14 @@ const invKey = (i: Invoice) =>
 
 export default function Page() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [statements, setStatements] = useState<StatementDoc[]>([]);
   const [settings, setSettings] = useState<TaxSettings>(DEFAULT_SETTINGS);
   const [dimension, setDimension] = useState<PeriodKind>("month");
   const [period, setPeriod] = useState("");
   const [hydrated, setHydrated] = useState(false);
   const [toast, setToast] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [showClear, setShowClear] = useState(false);
   const [editing, setEditing] = useState<Invoice | null>(null);
   const [dirFilter, setDirFilter] = useState<"all" | "output" | "input">("all");
   const [kindFilter, setKindFilter] = useState<"all" | "special" | "ordinary">("all");
@@ -152,45 +161,60 @@ export default function Page() {
   const [q, setQ] = useState("");
   const toastTimer = useRef<number | null>(null);
 
-  /* ---------------- 本地存储 ---------------- */
+  /* ---------------- 会话级存储 ---------------- */
+  // 数据只存在 sessionStorage：刷新不丢，关闭标签页由浏览器清除，不写磁盘。
   useEffect(() => {
     try {
-      const rawSettings = localStorage.getItem(LS.settings);
-      if (rawSettings) setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(rawSettings) });
+      const inv = migrateLegacy<Invoice[]>(SS.invoices, LEGACY.invoices, []);
+      const st = migrateLegacy<StatementDoc[]>(SS.statements, LEGACY.statements, []);
+      const set = migrateLegacy<TaxSettings | null>(SS.settings, LEGACY.settings, null);
 
-      const rawInvoices = localStorage.getItem(LS.invoices);
-      if (rawInvoices) {
-        const parsed = JSON.parse(rawInvoices);
-        if (Array.isArray(parsed)) {
-          // 迁移旧字段 deductible → checked，并清理早期示例数据
-          const cleaned = parsed
-            .filter((i: Invoice) => !String(i.id).startsWith("seed-"))
-            .map((i: Invoice & { deductible?: boolean }) => ({
-              ...i,
-              checked: i.checked ?? i.deductible ?? i.kind === "special",
-            }));
-          setInvoices(cleaned);
-        }
+      if (Array.isArray(inv.value) && inv.value.length) {
+        // 迁移旧字段 deductible → checked，清理早期示例数据，并剔除结构不完整的记录
+        const cleaned = inv.value
+          .filter(
+            (i) =>
+              i &&
+              typeof i.date === "string" &&
+              typeof i.total === "number" &&
+              isFinite(i.total) &&
+              !String(i?.id).startsWith("seed-"),
+          )
+          .map((i) => ({
+            ...i,
+            checked: i.checked ?? (i as Invoice & { deductible?: boolean }).deductible ?? i.kind === "special",
+          }));
+        setInvoices(cleaned);
       }
-      setDimension((localStorage.getItem(LS.dimension) as PeriodKind) || "month");
-      setPeriod(localStorage.getItem(LS.period) || "");
+      if (Array.isArray(st.value) && st.value.length) setStatements(st.value);
+      if (set.value && typeof set.value === "object") setSettings({ ...DEFAULT_SETTINGS, ...set.value });
+
+      const dim = readSSString(SS.dimension);
+      setDimension(dim === "quarter" || dim === "year" ? dim : "month");
+      setPeriod(readSSString(SS.period) || "");
+
+      // 立刻清掉旧版本留在磁盘上的数据
+      purgeLegacy();
     } catch {
-      /* 忽略本地存储异常 */
+      /* 存储异常时按空数据启动 */
     }
     setHydrated(true);
   }, []);
 
   useEffect(() => {
     if (!hydrated) return;
-    try {
-      localStorage.setItem(LS.invoices, JSON.stringify(invoices));
-      localStorage.setItem(LS.settings, JSON.stringify(settings));
-      localStorage.setItem(LS.dimension, dimension);
-      if (period) localStorage.setItem(LS.period, period);
-    } catch {
-      /* 配额超限时静默降级 */
-    }
-  }, [invoices, settings, dimension, period, hydrated]);
+    // 空数据不落键：清空后连键名都不留
+    const put = (key: string, value: unknown) => {
+      const empty = value === "" || value === null || value === undefined || (Array.isArray(value) && value.length === 0);
+      if (empty) removeSS(key);
+      else writeSS(key, value);
+    };
+    put(SS.invoices, invoices);
+    put(SS.statements, statements);
+    put(SS.settings, settings);
+    put(SS.dimension, dimension);
+    put(SS.period, period);
+  }, [invoices, statements, settings, dimension, period, hydrated]);
 
   const notify = useCallback((msg: string) => {
     setToast(msg);
@@ -199,17 +223,40 @@ export default function Page() {
   }, []);
 
   /* ---------------- 派生数据 ---------------- */
-  const options = useMemo(() => periodOptions(invoices), [invoices]);
+  const options = useMemo(
+    () => periodOptions(invoices, statements.map((s) => s.period).filter(Boolean)),
+    [invoices, statements],
+  );
   const periods = options[dimension];
   const activePeriod = period && periods.includes(period) ? period : periods[0] ?? "";
+
+  /** 当前期间对应的三张报表 */
+  const currentStatements = useMemo(
+    () => pickStatements(statements, activePeriod),
+    [statements, activePeriod],
+  );
 
   const periodInvoices = useMemo(
     () => invoices.filter((i) => inPeriod(i.date, activePeriod)),
     [invoices, activePeriod],
   );
   const result = useMemo(
-    () => computeTax(invoices, settings, activePeriod),
-    [invoices, settings, activePeriod],
+    () => computeTax(invoices, settings, activePeriod, currentStatements),
+    [invoices, settings, activePeriod, currentStatements],
+  );
+  const diffs = useMemo(
+    () =>
+      reconcile(currentStatements, {
+        outputAmount: result.outputAmount,
+        inputAmount: result.inputAmount,
+        outputTax: result.outputTax,
+        inputTax: result.inputTax,
+        vatPayable: result.vatPayable,
+        surchargeTotal: result.surchargeTotal,
+        stampDuty: result.stampDuty,
+        total: result.total,
+      }),
+    [currentStatements, result],
   );
   const trend = useMemo(() => groupByMonth(invoices), [invoices]);
   const rateBuckets = useMemo(() => groupByRate(periodInvoices), [periodInvoices]);
@@ -329,8 +376,62 @@ export default function Page() {
 
   const changeDimension = (d: PeriodKind) => {
     setDimension(d);
-    const next = periodOptions(invoices)[d];
+    const next = periodOptions(invoices, statements.map((s) => s.period).filter(Boolean))[d];
     setPeriod(next[0] ?? "");
+  };
+
+  /* ---------------- 财务报表 ---------------- */
+  const addStatements = (list: StatementDoc[]) => {
+    const stamp = Date.now();
+    // 没识别到期间的，归入当前期间（再不行用本月），保证能被 pickStatements 精确命中
+    const fallback = activePeriod || new Date().toISOString().slice(0, 7);
+    const normalized = list.map((d, i) => ({
+      ...d,
+      period: d.period || fallback,
+      id: `${stamp}-${i}`,
+    }));
+    setStatements((prev) => [...normalized, ...prev]);
+    const kinds = [...new Set(normalized.map((d) => d.kind))].length;
+    notify(`已导入 ${normalized.length} 份报表（${kinds} 类）`);
+    const p = normalized.find((d) => d.period)?.period;
+    if (p) {
+      if (dimension === "month") setPeriod(p);
+      else if (dimension === "quarter") setPeriod(`${p.slice(0, 4)}-Q${Math.ceil(Number(p.slice(5, 7)) / 3)}`);
+      else setPeriod(p.slice(0, 4));
+    }
+  };
+
+  const removeStatement = (id: string) => {
+    setStatements((prev) => prev.filter((d) => d.id !== id));
+    notify("已移除 1 份报表");
+  };
+
+  const changeStatementPeriod = (id: string, p: string) =>
+    setStatements((prev) => prev.map((d) => (d.id === id ? { ...d, period: p.trim() } : d)));
+
+  /* ---------------- 清空 ---------------- */
+  const clearBusiness = () => {
+    setInvoices([]);
+    setStatements([]);
+    setPeriod("");
+    setProjectFilter("");
+    setQ("");
+    clearBusinessKeys();
+    setShowClear(false);
+    notify("已清空发票与报表");
+  };
+
+  const clearAll = () => {
+    setInvoices([]);
+    setStatements([]);
+    setSettings(DEFAULT_SETTINGS);
+    setPeriod("");
+    setDimension("month");
+    setProjectFilter("");
+    setQ("");
+    clearAllKeys();
+    setShowClear(false);
+    notify("已全部重置");
   };
 
   const exportWorkbookFile = async () => {
@@ -344,11 +445,12 @@ export default function Page() {
       categories,
       parties,
       byKind,
+      statements: Object.values(currentStatements).filter(Boolean) as StatementDoc[],
     });
     notify("申报底稿已导出");
   };
 
-  const hasData = invoices.length > 0;
+  const hasData = invoices.length > 0 || statements.length > 0;
 
   return (
     <div className="page-in" id="top">
@@ -365,6 +467,8 @@ export default function Page() {
                 setEditing(null);
                 setShowForm(true);
               }}
+              onClear={() => setShowClear(true)}
+              hasData={invoices.length > 0 || statements.length > 0}
               companyName={settings.companyName}
             />
           </Reveal>
@@ -375,7 +479,7 @@ export default function Page() {
                 {[
                   ["01", "导入发票", "拖入 PDF / OFD / XML 原件或照片，支持多选批量识别。"],
                   ["02", "核对明细", "识别不确定的行会标「请核对」；进项专票默认已勾选。"],
-                  ["03", "查看税金", "按月、季、年自动算出增值税、附加税费与所得税估算。"],
+                  ["03", "查看税金", "按月、季、年算出增值税与附加税；再导入利润表，所得税改按账簿利润总额。"],
                 ].map(([num, title, desc]) => (
                   <div className="guide__item" key={num}>
                     <span className="guide__num num">{num}</span>
@@ -386,6 +490,24 @@ export default function Page() {
               </div>
             </Reveal>
           )}
+        </div>
+      </section>
+
+      {/* ============ 财务报表（不依赖发票，始终可见） ============ */}
+      <section className="section section--alt" id="statements">
+        <div className="wrap">
+          <Reveal>
+            <StatementSection
+              docs={statements}
+              activePeriod={activePeriod}
+              tax={result}
+              diffs={diffs}
+              onImport={addStatements}
+              onRemove={removeStatement}
+              onPeriodChange={changeStatementPeriod}
+              notify={notify}
+            />
+          </Reveal>
         </div>
       </section>
 
@@ -990,7 +1112,7 @@ export default function Page() {
                       <div>
                         <p className="body">企业所得税</p>
                         <p className="micro" style={{ marginTop: 8, lineHeight: 1.7 }}>
-                          以收入减成本、期间费用、税金及附加后的利润总额估算，小型微利企业适用 5% 实际税负，未考虑纳税调整。
+                          导入利润表后按账簿「利润总额」× 税率计算；未导入时退回「收入 − 成本 − 期间费用 − 税金」估算。小型微利企业适用 5% 实际税负，不含纳税调整。
                         </p>
                       </div>
                     </div>
@@ -1001,7 +1123,8 @@ export default function Page() {
                   <Accordion title="数据与合规说明" hint="展开查看">
                     <div className="warn-box">
                       本工具用于内部测算与核对，不构成税务意见，实际申报请以电子税务局数据与主管税务机关口径为准。
-                      发票数据仅保存在本机浏览器，清除浏览器数据会一并删除，建议定期导出 CSV 备份。
+                      数据只保存在当前标签页（浏览器会话存储），刷新不丢、关闭标签页即由浏览器清除，不写入磁盘，也不会上传任何服务器。
+                      需要留档请用「导出明细 / 导出申报底稿 / 报表导出」另存文件。
                       消费税、房产税、城镇土地使用税、个人所得税代扣代缴等请在「其他税费」手工填列。
                     </div>
                   </Accordion>
@@ -1015,20 +1138,14 @@ export default function Page() {
       <footer className="footer">
         <div className="wrap footer__inner">
           <span>
-            发票与税负工作台 · 数据保存在本机浏览器
-            {hasData ? ` · 共 ${invoices.length} 张发票` : ""}
+            发票与税负工作台 · 数据只在本次会话，关闭标签页即清除
+            {invoices.length ? ` · ${invoices.length} 张发票` : ""}
+            {statements.length ? ` · ${statements.length} 份报表` : ""}
           </span>
           <span className="row" style={{ gap: 16 }}>
             {hasData && (
-              <button
-                className="btn--text"
-                onClick={() => {
-                  setInvoices([]);
-                  setPeriod("");
-                  notify("已清空全部发票");
-                }}
-              >
-                清空全部发票
+              <button className="btn--text" onClick={() => setShowClear(true)}>
+                清空数据
               </button>
             )}
             <a className="btn--text" href="#top" style={{ fontSize: 15 }}>
@@ -1037,6 +1154,16 @@ export default function Page() {
           </span>
         </div>
       </footer>
+
+      {showClear && (
+        <ClearDialog
+          invoiceCount={invoices.length}
+          statementCount={statements.length}
+          onClose={() => setShowClear(false)}
+          onClearBusiness={clearBusiness}
+          onClearAll={clearAll}
+        />
+      )}
 
       {showForm && (
         <InvoiceModal
