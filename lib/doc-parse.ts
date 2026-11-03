@@ -209,6 +209,22 @@ function buildLines(
     .join("\n");
 }
 
+/** 判断这段文字是否可能来自发票（用于把回单/对账单排除掉） */
+export function looksLikeInvoice(text: string): boolean {
+  const flat = text.replace(/\s+/g, "");
+  if (!flat) return false;
+  const hits = [
+    /发票/,
+    /价税合计/,
+    /增值税/,
+    /征收率/,
+    /税率/,
+    /税额/,
+    /购买方|销售方|购方|销方/,
+  ].filter((re) => re.test(flat)).length;
+  return hits >= 2;
+}
+
 export function extractFromText(raw: string): DocFields | null {
   const text = raw
     .replace(/\u00a0/g, " ")
@@ -218,13 +234,14 @@ export function extractFromText(raw: string): DocFields | null {
   const flat = text.replace(/\s+/g, "");
   if (flat.length < 12) return null;
 
-  /* 发票号码：标签 → No. → 独立的 20 位 / 8 位数字 */
+  /* 发票号码 / 代码 */
   const number =
     flat.match(/发票号码[：:]?([0-9]{8,25})/)?.[1] ??
     flat.match(/发票号[：:]?([0-9]{8,25})/)?.[1] ??
     flat.match(/(?:No|NO|№)[.：:]?([0-9]{8,25})/)?.[1] ??
     flat.match(/(?<!\d)(\d{20})(?!\d)/)?.[1] ??
     flat.match(/(?<!\d)(\d{8})(?!\d)/)?.[1];
+  const code = flat.match(/(?:发票代码|票据代码)[：:]?([0-9]{10,12})/)?.[1];
 
   /* 开票日期：标签 → 中文日期 → 破折号日期 */
   const pad = (s: string) => s.padStart(2, "0");
@@ -234,28 +251,69 @@ export function extractFromText(raw: string): DocFields | null {
     flat.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
   const date = dm ? `${dm[1]}-${pad(dm[2])}-${pad(dm[3])}` : undefined;
 
-  /* 价税合计：小写 → 价税合计后第一个金额 */
+  /* 价税合计：小写 → 价税合计后第一个金额；红字发票带负号 */
+  const MONEY = "(-?[\\d,]+\\.\\d{2})";
   const total =
-    num(flat.match(/[（(]小写[)）][：:]?[¥￥]?([\d,]+\.?\d{0,2})/)?.[1]) ??
-    num(flat.match(/价税合计[^0-9]{0,18}?([\d,]+\.\d{2})/)?.[1]) ??
-    num(flat.match(/价税合计金额[：:]?[¥￥]?([\d,]+\.\d{2})/)?.[1]);
+    num(flat.match(new RegExp(`[（(]小写[)）][：:]?[¥￥]?${MONEY}`))?.[1]) ??
+    num(flat.match(new RegExp(`价税合计[^0-9\\-]{0,18}?${MONEY}`))?.[1]) ??
+    num(flat.match(new RegExp(`价税合计金额[：:]?[¥￥]?${MONEY}`))?.[1]) ??
+    // 行程单 / 铁路客票等没有「价税合计」字样，只有票价或金额合计
+    num(
+      flat.match(
+        new RegExp(`(?:票价合计|票价|金额合计|合计金额|总金额|实收金额)[：:]?[¥￥]?${MONEY}`),
+      )?.[1],
+    );
 
-  /* 合计行：金额 + 税额 */
+  /* 合计行：金额 + 税额（可能为负、可能被 *** 占位） */
   let amount: number | undefined;
   let tax: number | undefined;
-  const sum =
-    flat.match(/合\s*计[¥￥]?([\d,]+\.\d{2})[¥￥]?([\d,]+\.\d{2})/) ??
-    flat.match(/合\s*计[¥￥]?([\d,]+\.\d{2})/);
+  const sum = flat.match(new RegExp(`合\\s*计[¥￥]?${MONEY}[¥￥]?${MONEY}`));
   if (sum) {
     amount = num(sum[1]);
-    if (sum[2]) tax = num(sum[2]);
+    tax = num(sum[2]);
+  } else {
+    const only = flat.match(new RegExp(`合\\s*计[¥￥]?${MONEY}`));
+    if (only) amount = num(only[1]);
   }
 
-  const rate =
-    normRate(text.match(/(?:^|\s)(\d{1,2})\s*%/)?.[1]) ??
-    [...flat.matchAll(/(\d{1,2})%/g)]
-      .map((m) => Number(m[1]))
-      .find((r) => [0, 1, 3, 5, 6, 9, 13, 17].includes(r));
+  /* 税率：免税/不征税先判，再取带 % 的百分比（注意 "1%" 不能被当成 100） */
+  const exempt = /免税|不征税|零税率/.test(flat);
+  const pct = text.match(/(?:^|[\s(（])(\d{1,2})\s*%/);
+  let rate = exempt
+    ? 0
+    : pct
+      ? Number(pct[1])
+      : [...flat.matchAll(/(\d{1,2})%/g)]
+          .map((m) => Number(m[1]))
+          .find((r) => [0, 1, 3, 5, 6, 9, 13, 17].includes(r));
+
+  if (exempt && tax === undefined) tax = 0;
+  // 合计行没有税额时，找「税额合计」（客票 / 行程单常见）
+  if (tax === undefined) {
+    tax = num(flat.match(new RegExp(`(?:税额合计|税额总计)[：:]?[¥￥]?${MONEY}`))?.[1]);
+  }
+  // 无税率列时按「税额 ÷ 金额」反推，并吸附到常见档位
+  if (rate === undefined && amount && tax !== undefined && amount !== 0) {
+    const raw = (tax / amount) * 100;
+    const snapped = [0, 1, 3, 5, 6, 9, 13, 17].find((r) => Math.abs(r - raw) < 0.3);
+    if (snapped !== undefined) rate = snapped;
+    else if (raw > 0 && raw <= 100) rate = Math.round(raw * 100) / 100;
+  }
+  // 合计行缺失：优先「价税合计 − 税额」，其次按税率折算
+  if (amount === undefined && total !== undefined) {
+    if (tax !== undefined) {
+      amount = Math.round((total - tax) * 100) / 100;
+    } else if (rate !== undefined && rate >= 0) {
+      amount = Math.round((total / (1 + rate / 100)) * 100) / 100;
+      tax = Math.round((total - amount) * 100) / 100;
+    }
+  }
+  // 仍无税率但有金额与税额，再反推一次
+  if (rate === undefined && amount && tax !== undefined && amount !== 0) {
+    const raw = (tax / amount) * 100;
+    const snapped = [0, 1, 3, 5, 6, 9, 13, 17].find((r) => Math.abs(r - raw) < 0.3);
+    if (snapped !== undefined) rate = snapped;
+  }
 
   /* 名称：先在整行里找，再在去空白的整篇里找 */
   const namePattern = (label: string) =>
@@ -293,6 +351,33 @@ export function extractFromText(raw: string): DocFields | null {
   const buyer = buyerRaw ? cleanName(buyerRaw) : allNames[0];
   const seller = sellerRaw ? cleanName(sellerRaw) : allNames[1];
 
+  /* 没有「名称：」标签时（购销方用表头），按标签切段取公司名 */
+  let buyerFinal = buyer;
+  let sellerFinal = seller;
+  if (!buyerFinal || !sellerFinal) {
+    const LABEL = /(购买方|购货单位|购方|销售方|销货单位|销方)/;
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      if (!LABEL.test(lines[i])) continue;
+      const segs = lines[i].split(/(购买方|购货单位|购方|销售方|销货单位|销方)/);
+      for (let s = 1; s < segs.length; s += 2) {
+        const label = segs[s];
+        const chunk = segs[s + 1] ?? "";
+        const target = /销/.test(label) ? "seller" : "buyer";
+        if (target === "seller" ? sellerFinal : buyerFinal) continue;
+        const hit = chunk.match(NAME_RE);
+        const alt = hit ? hit[0].replace(/[\s：:]/g, "") : "";
+        const nextLine = (lines[i + 1] ?? "").match(NAME_RE)?.[0].replace(/[\s：:]/g, "");
+        const name = alt || nextLine;
+        if (name && name.length >= 2) {
+          if (target === "seller") sellerFinal = name;
+          else buyerFinal = name;
+        }
+      }
+      if (buyerFinal && sellerFinal) break;
+    }
+  }
+
   /* 项目：优先税收分类编码写法 *类别*具体名称 */
   const itemNames: string[] = [];
   for (const m of text.matchAll(/\*([^*\n]{1,20})\*([^\s*]{1,30})/g)) {
@@ -300,20 +385,42 @@ export function extractFromText(raw: string): DocFields | null {
     if (name && !itemNames.includes(name)) itemNames.push(name);
   }
   if (itemNames.length === 0) {
-    const itemRaw = text.match(/项目名称[：:]?\s*([^\n]+)/)?.[1];
+    // 必须是「项目名称：xxx」这种字段写法；表头「项目名称 单位 数量」不能当项目名
+    const itemRaw = text.match(/项目名称[：:]\s*([^\n]+)/)?.[1];
     if (itemRaw) {
       const cleaned = cleanName(itemRaw).slice(0, 20);
       if (cleaned) itemNames.push(cleaned);
     }
   }
+  // 没有 *类别* 也没有「项目名称：」时，取表头下一行的首列（老版专票的「货物或应税劳务」列）
+  if (itemNames.length === 0) {
+    const lines = text.split("\n");
+    const hi = lines.findIndex((l) => /项目名称|货物或应税|服务名称|品名/.test(l));
+    if (hi >= 0) {
+      for (const l of lines.slice(hi + 1)) {
+        if (/^\s*$/.test(l)) continue;
+        if (/合\s*计|价税合计/.test(l)) break;
+        const tok = l.trim().split(/\s+/)[0];
+        if (tok && /[\u4e00-\u9fa5]/.test(tok) && !/^[*¥￥\-]/.test(tok)) {
+          itemNames.push(tok.slice(0, 24));
+          break;
+        }
+      }
+    }
+  }
 
-  if (!number && total === undefined && !date) return null;
+  // 一张发票的硬指标：至少有票号或价税合计（只有日期不够，回单/对账单都有日期）
+  if (!number && total === undefined) {
+    if (!looksLikeInvoice(text)) return null;
+    if (!date) return null;
+  }
 
   return {
     number,
+    code,
     date,
-    buyer,
-    seller,
+    buyer: buyerFinal,
+    seller: sellerFinal,
     total,
     amount,
     tax,
@@ -423,6 +530,15 @@ export async function parseOfd(file: File): Promise<DocOutcome> {
       text,
     };
   }
+  if (fields.amount === undefined && fields.total === undefined) {
+    return {
+      fields: null,
+      confidence: "text",
+      warnings: [],
+      errors: ["OFD 里读到了票号 / 日期，但没读到金额，请用「手工录入」补金额与税率。"],
+      text,
+    };
+  }
   return {
     fields,
     confidence: "text",
@@ -486,14 +602,17 @@ export async function parsePdf(file: File): Promise<DocOutcome> {
       );
     } else {
       await doc.destroy();
+      const notInvoice = flatLen >= 20 && !looksLikeInvoice(text);
       return {
         fields: null,
         confidence: "text",
         warnings: [],
         errors: [
-          flatLen < 20
-            ? "这份 PDF 没有可提取的文字层，也没读到发票二维码。请改用该发票的 OFD / XML 原件，或手工录入。"
-            : `PDF 读到 ${flatLen} 个字符，但没匹配到发票号码 / 价税合计，可能是特殊版式；也没读到二维码。可用「手工录入」补 4 个字段。`,
+          notInvoice
+            ? `这份文件读到了 ${flatLen} 个字符，但没有发票要素（票号、价税合计），看起来是回单 / 对账单 / 合同一类的单据，不是发票。`
+            : flatLen < 20
+              ? "这份 PDF 没有可提取的文字层，也没读到发票二维码。请改用该发票的 OFD / XML 原件，或手工录入。"
+              : `PDF 读到 ${flatLen} 个字符，但没匹配到发票号码 / 价税合计，可能是特殊版式；也没读到二维码。可用「手工录入」补 4 个字段。`,
         ],
         text: text.slice(0, 2000),
       };
@@ -503,6 +622,18 @@ export async function parsePdf(file: File): Promise<DocOutcome> {
   await doc.destroy();
 
   if (confidence === "text") {
+    // 有票号日期却没金额：入库会变成 0 元发票，宁可明确报错让用户补录
+    if (fields.amount === undefined && fields.total === undefined) {
+      return {
+        fields: null,
+        confidence,
+        warnings: [],
+        errors: [
+          "读到了票号 / 日期，但没读到金额与税额（常见于行程单、客票或转曲版式）。请用「手工录入」补金额与税率，4 个字段即可。",
+        ],
+        text: text.slice(0, 2000),
+      };
+    }
     const missing = [
       !fields.number && "发票号码",
       !fields.date && "开票日期",
@@ -666,11 +797,17 @@ export async function parseDoc(file: File): Promise<DocOutcome> {
     if (DOC_EXT.test(name)) return await parseImage(file);
     return { fields: null, confidence: "text", warnings: [], errors: ["不支持的文件类型。"] };
   } catch (err) {
+    const msg = (err as Error).message || "";
+    const friendly = /password/i.test(msg)
+      ? "这份 PDF 设置了打开密码，请先解除密码后再导入。"
+      : /Invalid PDF|InvalidPDF|structure/i.test(msg)
+        ? "文件不是有效的 PDF，或已经损坏。"
+        : `解析失败：${msg || "文件可能损坏"}`;
     return {
       fields: null,
       confidence: "text",
       warnings: [],
-      errors: [`解析失败：${(err as Error).message || "文件可能损坏"}`],
+      errors: [friendly],
     };
   }
 }

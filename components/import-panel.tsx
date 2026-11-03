@@ -233,7 +233,16 @@ export function ImportPanel({
                   {e.status === "parsing" ? (
                     <span className="skeleton" style={{ width: 96, height: 10 }} />
                   ) : e.status === "error" ? (
-                    "未识别到票面要素"
+                    <>
+                      未识别到票面要素
+                      <button
+                        className="btn--text"
+                        onClick={onManual}
+                        style={{ fontSize: 13, marginLeft: 10 }}
+                      >
+                        手工补录
+                      </button>
+                    </>
                   ) : (
                     `识别 ${e.invoices.length} 张 · 税额 ${fmtMoney(
                       e.invoices.reduce((s, i) => s + i.tax, 0),
